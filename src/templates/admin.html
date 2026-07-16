@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1"
+    >
+
+    <title>Bloqueio de compra por CPF</title>
+
+    <style>
+        .status.simulado {
+    background: #dbeafe;
+    color: #1d4ed8;
+}
+            .status.pendente {
+        background: #fef3c7;
+        color: #92400e;
+    }
+
+    .status.cancelado {
+        background: #fee2e2;
+        color: #991b1b;
+    }
+
+    .status.liberado {
+        background: #dcfce7;
+        color: #166534;
+    }
+
+    .status.erro {
+        background: #f3f4f6;
+        color: #374151;
+    }
+
+    .acoes-cancelamento {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+    }
+
+    .acoes-cancelamento form {
+        margin: 0;
+    }
+        .status.liberado {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .status.duplicado {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .status.reprocessamento {
+            background: #dbeafe;
+            color: #1d4ed8;
+        }
+
+        .status.ignorado {
+            background: #fef3c7;
+            color: #92400e;
+        }
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            background: #f3f4f6;
+            color: #18181b;
+            font-family: Arial, Helvetica, sans-serif;
+        }
+
+        header {
+            background: #111827;
+            color: white;
+            padding: 24px 30px;
+        }
+
+        header h1 {
+            margin: 0 0 6px;
+            font-size: 24px;
+        }
+
+        header p {
+            margin: 0;
+            color: #d1d5db;
+        }
+
+        main {
+            width: min(1400px, 95%);
+            margin: 28px auto;
+        }
+
+        .resumos {
+            display: grid;
+            grid-template-columns: repeat(
+                auto-fit,
+                minmax(190px, 1fr)
+            );
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .resumo {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 8px
+                rgba(0, 0, 0, 0.08);
+        }
+
+        .resumo strong {
+            display: block;
+            margin-top: 8px;
+            font-size: 28px;
+        }
+
+        .painel {
+            background: white;
+            border-radius: 10px;
+            padding: 22px;
+            margin-bottom: 24px;
+            box-shadow: 0 2px 8px
+                rgba(0, 0, 0, 0.08);
+        }
+
+        .painel h2 {
+            margin-top: 0;
+        }
+
+        form.grade {
+            display: grid;
+            grid-template-columns:
+                1fr 2fr 160px 130px;
+            gap: 12px;
+            align-items: end;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 6px;
+            font-size: 14px;
+            font-weight: bold;
+        }
+
+        input {
+            width: 100%;
+            border: 1px solid #d1d5db;
+            border-radius: 7px;
+            padding: 11px;
+            font-size: 14px;
+        }
+
+        button {
+            border: none;
+            border-radius: 7px;
+            padding: 11px 15px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        .botao-principal {
+            background: #111827;
+            color: white;
+        }
+
+        .botao-ativar {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .botao-desativar {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .mensagem {
+            border-radius: 8px;
+            padding: 13px;
+            margin-bottom: 18px;
+        }
+
+        .mensagem.sucesso {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .mensagem.erro {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .tabela-container {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            min-width: 900px;
+        }
+
+        th,
+        td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e5e7eb;
+            font-size: 14px;
+        }
+
+        th {
+            background: #f9fafb;
+        }
+
+        .status {
+            display: inline-block;
+            border-radius: 999px;
+            padding: 5px 10px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+
+        .status.ativo {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .status.inativo {
+            background: #e5e7eb;
+            color: #4b5563;
+        }
+
+        .cpf {
+            font-family: monospace;
+        }
+
+        .pesquisa {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 18px;
+        }
+
+        .pesquisa input {
+            max-width: 450px;
+        }
+
+        .vazio {
+            padding: 25px;
+            color: #6b7280;
+            text-align: center;
+        }
+
+        @media (max-width: 850px) {
+            form.grade {
+                grid-template-columns: 1fr;
+            }
+
+            .pesquisa {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <header>
+        <h1>Bloqueio de compra por CPF</h1>
+
+        <p>
+            Administração de produtos controlados e compras
+            registradas
+        </p>
+    </header>
+
+    <main>
+        {% with mensagens = get_flashed_messages(
+            with_categories=true
+        ) %}
+            {% for categoria, mensagem in mensagens %}
+                <div class="mensagem {{ categoria }}">
+                    {{ mensagem }}
+                </div>
+            {% endfor %}
+        {% endwith %}
+
+        <section class="resumos">
+            <div class="resumo">
+                Produtos cadastrados
+
+                <strong>
+                    {{ total_produtos }}
+                </strong>
+            </div>
+
+            <div class="resumo">
+                Produtos ativos
+
+                <strong>
+                    {{ total_produtos_ativos }}
+                </strong>
+            </div>
+
+            <div class="resumo">
+                Compras exibidas
+
+                <strong>
+                    {{ total_compras }}
+                </strong>
+            </div>
+                        <div class="resumo">
+                Cancelamentos pendentes
+
+                <strong>
+                    {{ total_cancelamentos_pendentes }}
+                </strong>
+            </div>
+        </section>
+
+        <section class="painel">
+            <h2>Adicionar produto controlado</h2>
+
+            <form
+                class="grade"
+                method="post"
+                action="{{ url_for(
+                    'admin.adicionar_produto'
+                ) }}"
+            >
+                <div>
+                    <label for="produto_id">
+                        Product ID
+                    </label>
+
+                    <input
+                        id="produto_id"
+                        name="produto_id"
+                        required
+                        placeholder="Ex.: 352087421"
+                    >
+                </div>
+
+                <div>
+                    <label for="nome_produto">
+                        Nome do produto
+                    </label>
+
+                    <input
+                        id="nome_produto"
+                        name="nome_produto"
+                        placeholder="Nome para identificação"
+                    >
+                </div>
+
+                <div>
+                    <label for="limite_por_cpf">
+                        Limite por CPF
+                    </label>
+
+                    <input
+                        id="limite_por_cpf"
+                        name="limite_por_cpf"
+                        type="number"
+                        min="1"
+                        value="1"
+                        required
+                    >
+                </div>
+
+                <button
+                    class="botao-principal"
+                    type="submit"
+                >
+                    Adicionar
+                </button>
+            </form>
+        </section>
+
+        <section class="painel">
+            <h2>Produtos controlados</h2>
+
+            <div class="tabela-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Product ID</th>
+                            <th>Produto</th>
+                            <th>Limite</th>
+                            <th>Status</th>
+                            <th>Cadastro</th>
+                            <th>Ação</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {% for produto in produtos %}
+                            <tr>
+                                <td>
+                                    {{ produto.produto_id }}
+                                </td>
+
+                                <td>
+                                    {{
+                                        produto.nome_produto
+                                        or "-"
+                                    }}
+                                </td>
+
+                                <td>
+                                    {{
+                                        produto.limite_por_cpf
+                                    }}
+                                </td>
+
+                                <td>
+                                    {% if produto.ativo %}
+                                        <span
+                                            class="status ativo"
+                                        >
+                                            Ativo
+                                        </span>
+                                    {% else %}
+                                        <span
+                                            class="status inativo"
+                                        >
+                                            Inativo
+                                        </span>
+                                    {% endif %}
+                                </td>
+
+                                <td>
+                                    {{ produto.criado_em }}
+                                </td>
+
+                                <td>
+                                    {% if produto.ativo %}
+                                        <form
+                                            method="post"
+                                            action="{{ url_for(
+                                                'admin.desativar_produto',
+                                                produto_id=produto.produto_id
+                                            ) }}"
+                                        >
+                                            <button
+                                                class="botao-desativar"
+                                                type="submit"
+                                            >
+                                                Desativar
+                                            </button>
+                                        </form>
+                                    {% else %}
+                                        <form
+                                            method="post"
+                                            action="{{ url_for(
+                                                'admin.ativar_produto',
+                                                produto_id=produto.produto_id
+                                            ) }}"
+                                        >
+                                            <button
+                                                class="botao-ativar"
+                                                type="submit"
+                                            >
+                                                Ativar
+                                            </button>
+                                        </form>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% else %}
+                            <tr>
+                                <td
+                                    class="vazio"
+                                    colspan="6"
+                                >
+                                    Nenhum produto cadastrado.
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="painel">
+            <h2>Compras registradas</h2>
+
+            <form
+                class="pesquisa"
+                method="get"
+                action="{{ url_for('admin.painel') }}"
+            >
+                <input
+                    name="pesquisa"
+                    value="{{ pesquisa }}"
+                    placeholder="CPF, produto, SKU ou pedido"
+                >
+
+                <button
+                    class="botao-principal"
+                    type="submit"
+                >
+                    Pesquisar
+                </button>
+
+                {% if pesquisa %}
+                    <a href="{{ url_for('admin.painel') }}">
+                        Limpar pesquisa
+                    </a>
+                {% endif %}
+            </form>
+
+            <div class="tabela-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Pedido</th>
+                            <th>CPF</th>
+                            <th>Produto</th>
+                            <th>Product ID</th>
+                            <th>SKU</th>
+                            <th>Quantidade</th>
+                            <th>Pagamento</th>
+                            <th>Data</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {% for compra in compras %}
+                            <tr>
+                                <td>
+                                    #{{ compra.numero_pedido }}
+                                </td>
+
+                                <td class="cpf">
+                                    {{ compra.cpf }}
+                                </td>
+
+                                <td>
+                                    {{
+                                        compra.nome_produto
+                                        or "-"
+                                    }}
+                                </td>
+
+                                <td>
+                                    {{ compra.produto_id }}
+                                </td>
+
+                                <td>
+                                    {{ compra.sku or "-" }}
+                                </td>
+
+                                <td>
+                                    {{ compra.quantidade }}
+                                </td>
+
+                                <td>
+                                    {{
+                                        compra.status_pagamento
+                                        or "-"
+                                    }}
+                                </td>
+
+                                <td>
+                                    {{ compra.criado_em }}
+                                </td>
+                            </tr>
+                        {% else %}
+                            <tr>
+                                <td
+                                    class="vazio"
+                                    colspan="8"
+                                >
+                                    Nenhuma compra encontrada.
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    <section class="painel">
+        <section class="painel">
+            <h2>Cancelamentos</h2>
+
+            <div class="tabela-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Pedido</th>
+                            <th>CPF</th>
+                            <th>Produto</th>
+                            <th>Product ID</th>
+                            <th>Motivo</th>
+                            <th>Status</th>
+                            <th>Data</th>
+                            <th>Ações</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {% for cancelamento in cancelamentos %}
+                            <tr>
+                                <td>
+                                    #{{ cancelamento.numero_pedido or "-" }}
+                                </td>
+
+                                <td class="cpf">
+                                    {{ cancelamento.cpf or "-" }}
+                                </td>
+
+                                <td>
+                                    {{ cancelamento.nome_produto or "-" }}
+                                </td>
+
+                                <td>
+                                    {{ cancelamento.produto_id or "-" }}
+                                </td>
+
+                                <td>
+                                    {{ cancelamento.motivo }}
+                                </td>
+
+                                <td>
+                                    <span class="status {{ cancelamento.status }}">
+                                        {{ cancelamento.status }}
+                                    </span>
+                                </td>
+
+                                <td>
+                                    {{ cancelamento.criado_em }}
+                                </td>
+
+                                <td>
+                                    {% if cancelamento.status == "pendente" %}
+                                        <div class="acoes-cancelamento">
+                                            <form
+                                                method="post"
+                                                action="{{ url_for(
+                                                    'admin.executar_cancelamento',
+                                                    cancelamento_id=cancelamento.id
+                                                ) }}"
+                                            >
+                                                <button
+                                                    class="botao-desativar"
+                                                    type="submit"
+                                                >
+                                                    Processar cancelamento
+                                                </button>
+                                            </form>
+
+                                            <form
+                                                method="post"
+                                                action="{{ url_for(
+                                                    'admin.liberar_cancelamento',
+                                                    cancelamento_id=cancelamento.id
+                                                ) }}"
+                                            >
+                                                <button
+                                                    class="botao-ativar"
+                                                    type="submit"
+                                                >
+                                                    Liberar
+                                                </button>
+                                            </form>
+                                        </div>
+                                    {% else %}
+                                        -
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% else %}
+                            <tr>
+                                <td
+                                    class="vazio"
+                                    colspan="8"
+                                >
+                                    Nenhum cancelamento registrado.
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+        <h2>Histórico de processamento</h2>
+
+        <div class="tabela-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Data</th>
+                        <th>Pedido</th>
+                        <th>CPF</th>
+                        <th>Produto</th>
+                        <th>Product ID</th>
+                        <th>Resultado</th>
+                        <th>Motivo</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {% for log in logs %}
+                        <tr>
+                            <td>
+                                {{ log.criado_em }}
+                            </td>
+
+                            <td>
+                                #{{ log.numero_pedido or "-" }}
+                            </td>
+
+                            <td class="cpf">
+                                {{ log.cpf or "-" }}
+                            </td>
+
+                            <td>
+                                {{ log.nome_produto or "-" }}
+                            </td>
+
+                            <td>
+                                {{ log.produto_id or "-" }}
+                            </td>
+
+                            <td>
+                                <span class="status {{ log.resultado }}">
+                                    {{ log.resultado }}
+                                </span>
+                            </td>
+
+                            <td>
+                                {{ log.motivo or "-" }}
+                            </td>
+                        </tr>
+                    {% else %}
+                        <tr>
+                            <td
+                                class="vazio"
+                                colspan="7"
+                            >
+                                Nenhum processamento registrado.
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    </main>
+</body>
+</html>

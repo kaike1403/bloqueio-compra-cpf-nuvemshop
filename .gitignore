@@ -1,0 +1,27 @@
+# Variáveis secretas
+.env
+
+# Banco local e dados pessoais
+banco/*.db
+src/*.db
+pedido_teste.json
+*.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ambiente virtual
+.venv/
+venv/
+env/
+
+# Editor
+.vscode/
+.idea/
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
