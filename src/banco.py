@@ -575,6 +575,67 @@ def buscar_compras_do_dia(
         for linha in resultados
     ]
 
+def buscar_compra_paga_do_dia(
+    cpf: str,
+    produto_id: int | str,
+    data_pedido: str,
+) -> dict[str, Any]:
+    """
+    Busca uma compra paga do mesmo CPF e produto
+    na data informada.
+
+    A comparação do dia utiliza a coluna criado_em.
+    Pedidos cancelados são ignorados.
+    """
+
+    criar_banco()
+
+    cpf_limpo = normalizar_cpf(cpf)
+    produto_id_texto = str(produto_id).strip()
+    data_pedido_texto = str(data_pedido).strip()
+
+    if not cpf_limpo:
+        return {}
+
+    if not produto_id_texto:
+        return {}
+
+    if not data_pedido_texto:
+        return {}
+
+    with conectar() as conexao:
+        resultado = conexao.execute(
+            """
+            SELECT *
+            FROM compras
+            WHERE cpf = ?
+              AND CAST(produto_id AS TEXT) = ?
+              AND DATE(criado_em) = ?
+              AND LOWER(
+                    COALESCE(status_pagamento, '')
+                  ) = 'paid'
+              AND LOWER(
+                    COALESCE(status_pedido, '')
+                  ) NOT IN (
+                    'cancelled',
+                    'canceled',
+                    'cancelado'
+                  )
+            ORDER BY criado_em DESC, id DESC
+            LIMIT 1
+            """,
+            (
+                cpf_limpo,
+                produto_id_texto,
+                data_pedido_texto,
+            ),
+        ).fetchone()
+
+    if resultado is None:
+        return {}
+
+    return dict(resultado)
+
 
 def registrar_compra(
     cpf: str,

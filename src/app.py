@@ -4,6 +4,7 @@ from flask import Flask, jsonify
 
 from src.admin import admin_bp
 from src.banco import criar_banco
+from src.checkout_api import checkout_bp
 from src.webhook import webhook_bp
 
 print("=" * 80)
@@ -24,6 +25,7 @@ def criar_app() -> Flask:
 
     app.register_blueprint(webhook_bp)
     app.register_blueprint(admin_bp)
+    app.register_blueprint(checkout_bp)
 
     @app.route("/", methods=["GET"])
     def inicio():
