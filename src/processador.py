@@ -1,5 +1,6 @@
 from typing import Any
-
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from src.banco import (
     atualizar_cancelamentos_do_pedido,
     compra_do_mesmo_pedido_existe,
@@ -27,20 +28,22 @@ from src.verificacao import (
 
 MODO_SIMULACAO = True
 
-
 def pagamento_valido(pedido: dict[str, Any]) -> bool:
     """
-    Define quais status de pagamento podem registrar uma compra.
+    Pedidos pagos e pendentes participam do controle.
 
-    No momento, somente pedidos pagos serão processados.
+    Um pedido pendente já reserva o direito de compra
+    daquele CPF durante o dia.
     """
 
     status_pagamento = str(
         pedido.get("payment_status", "")
     ).lower().strip()
 
-    return status_pagamento == "paid"
-
+    return status_pagamento in {
+        "paid",
+        "pending",
+    }
 
 def pedido_cancelado(pedido: dict[str, Any]) -> bool:
     """
@@ -52,6 +55,124 @@ def pedido_cancelado(pedido: dict[str, Any]) -> bool:
     ).lower().strip()
 
     return status == "cancelled"
+FUSO_LOJA = ZoneInfo("America/Sao_Paulo")
+
+
+def obter_data_do_pedido(
+    pedido: dict[str, Any],
+) -> tuple[str, str]:
+    """
+    Retorna:
+    - data no formato YYYY-MM-DD;
+    - data e hora completas normalizadas para São Paulo.
+    """
+
+    criado_em = str(
+        pedido.get("created_at", "")
+    ).strip()
+
+    if not criado_em:
+        agora = datetime.now(FUSO_LOJA)
+
+        return (
+            agora.strftime("%Y-%m-%d"),
+            agora.isoformat(),
+        )
+
+    criado_em = criado_em.replace(
+        "Z",
+        "+00:00",
+    )
+
+    try:
+        data_hora = datetime.fromisoformat(
+            criado_em
+        )
+    except ValueError:
+        agora = datetime.now(FUSO_LOJA)
+
+        return (
+            agora.strftime("%Y-%m-%d"),
+            agora.isoformat(),
+        )
+
+    if data_hora.tzinfo is None:
+        data_hora = data_hora.replace(
+            tzinfo=FUSO_LOJA
+        )
+    else:
+        data_hora = data_hora.astimezone(
+            FUSO_LOJA
+        )
+
+    return (
+        data_hora.strftime("%Y-%m-%d"),
+        data_hora.isoformat(),
+    )
+def prioridade_pagamento(
+    status: str | None,
+) -> int:
+    status_normalizado = str(
+        status or ""
+    ).lower().strip()
+
+    prioridades = {
+        "paid": 2,
+        "pending": 1,
+    }
+
+    return prioridades.get(
+        status_normalizado,
+        0,
+    )
+
+
+def pedido_atual_deve_ser_cancelado(
+    pedido_atual: dict[str, Any],
+    compra_anterior: dict[str, Any],
+) -> bool:
+    """
+    Pago vence de pendente.
+
+    Se ambos possuem o mesmo status,
+    o pedido mais antigo vence.
+    """
+
+    status_atual = pedido_atual.get(
+        "payment_status"
+    )
+
+    status_anterior = compra_anterior.get(
+        "status_pagamento"
+    )
+
+    prioridade_atual = prioridade_pagamento(
+        status_atual
+    )
+
+    prioridade_anterior = prioridade_pagamento(
+        status_anterior
+    )
+
+    if prioridade_atual < prioridade_anterior:
+        return True
+
+    if prioridade_atual > prioridade_anterior:
+        return False
+
+    atual_criado_em = str(
+        pedido_atual.get("created_at", "")
+    )
+
+    anterior_criado_em = str(
+        compra_anterior.get(
+            "pedido_criado_em",
+            "",
+        )
+    )
+
+    return atual_criado_em >= anterior_criado_em
+
 
 
 def processar_pedido(
@@ -107,6 +228,11 @@ def processar_pedido(
         return resultado
 
     numero_pedido = pedido.get("number")
+    data_pedido, pedido_criado_em = (
+        obter_data_do_pedido(pedido)
+    )
+
+    print(f"Data considerada: {data_pedido}")
 
     resultado["numero_pedido"] = numero_pedido
 
@@ -158,6 +284,49 @@ def processar_pedido(
     print(f"CPF localizado: {cpf_mascarado}")
 
     produtos = extrair_produtos_do_pedido(pedido)
+    produtos_controlados_no_pedido = [
+        produto
+        for produto in produtos
+        if produto_esta_controlado(
+            produto.get("produto_id")
+        )
+    ]
+
+    quantidade_total_controlada = sum(
+        int(produto.get("quantidade", 1))
+        for produto in produtos_controlados_no_pedido
+    )
+
+    if quantidade_total_controlada > 1:
+        print(
+            "DUPLICADO: o pedido possui mais de uma "
+            "unidade entre os produtos controlados."
+        )
+
+        resultado["duplicado"] = True
+
+        for produto in produtos_controlados_no_pedido:
+            resultado["produtos_duplicados"].append(
+                {
+                    "produto_id": produto.get(
+                        "produto_id"
+                    ),
+                    "variante_id": produto.get(
+                        "variante_id"
+                    ),
+                    "sku": produto.get("sku"),
+                    "nome": produto.get("nome"),
+                    "quantidade": produto.get(
+                        "quantidade",
+                        1,
+                    ),
+                    "motivo": (
+                        "Pedido possui mais de uma unidade "
+                        "de produtos controlados"
+                    ),
+                }
+            )
+
 
     if not produtos:
         mensagem = "Nenhum produto localizado no pedido."
@@ -365,6 +534,8 @@ def processar_pedido(
             status_pagamento=pedido.get(
                 "payment_status"
             ),
+            pedido_criado_em=pedido_criado_em,
+            data_pedido=data_pedido,
         )
 
         if registrado:

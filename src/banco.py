@@ -350,13 +350,14 @@ def criar_banco() -> None:
                 numero_pedido TEXT,
                 status_pedido TEXT,
                 status_pagamento TEXT,
+                pedido_criado_em TEXT NOT NULL,
+                data_pedido TEXT NOT NULL,
                 criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
 
-                UNIQUE(cpf, produto_id)
+                UNIQUE(pedido_id, produto_id)
             )
             """
         )
-        
         conexao.execute(
             """
             CREATE TABLE IF NOT EXISTS logs_processamento (
@@ -521,11 +522,66 @@ def compra_ja_existe(
 
     return resultado is not None
 
+def buscar_compras_do_dia(
+    cpf: str,
+    produto_id: int | str,
+    data_pedido: str,
+    excluir_pedido_id: int | str | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Busca pedidos do mesmo CPF e produto no mesmo dia.
+
+    Pedidos cancelados são ignorados.
+    """
+
+    cpf_limpo = normalizar_cpf(cpf)
+
+    consulta = """
+        SELECT *
+        FROM compras
+        WHERE cpf = ?
+          AND produto_id = ?
+          AND data_pedido = ?
+          AND status_pedido != 'cancelled'
+    """
+
+    parametros: list[Any] = [
+        cpf_limpo,
+        str(produto_id),
+        data_pedido,
+    ]
+
+    if excluir_pedido_id is not None:
+        consulta += """
+            AND pedido_id != ?
+        """
+
+        parametros.append(
+            str(excluir_pedido_id)
+        )
+
+    consulta += """
+        ORDER BY pedido_criado_em ASC, id ASC
+    """
+
+    with conectar() as conexao:
+        resultados = conexao.execute(
+            consulta,
+            tuple(parametros),
+        ).fetchall()
+
+    return [
+        dict(linha)
+        for linha in resultados
+    ]
+
 
 def registrar_compra(
     cpf: str,
     produto_id: int | str,
     pedido_id: int | str,
+    pedido_criado_em: str,
+    data_pedido: str,
     numero_pedido: int | str | None = None,
     variante_id: int | str | None = None,
     sku: str | None = None,
@@ -569,21 +625,33 @@ def registrar_compra(
                     pedido_id,
                     numero_pedido,
                     status_pedido,
-                    status_pagamento
+                    status_pagamento,
+                    pedido_criado_em,
+                    data_pedido
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     cpf_limpo,
                     produto_id_texto,
-                    str(variante_id) if variante_id is not None else None,
+                    (
+                        str(variante_id)
+                        if variante_id is not None
+                        else None
+                    ),
                     sku,
                     nome_produto,
                     int(quantidade),
                     pedido_id_texto,
-                    str(numero_pedido) if numero_pedido is not None else None,
+                    (
+                        str(numero_pedido)
+                        if numero_pedido is not None
+                        else None
+                    ),
                     status_pedido,
                     status_pagamento,
+                    pedido_criado_em,
+                    data_pedido,
                 ),
             )
 
