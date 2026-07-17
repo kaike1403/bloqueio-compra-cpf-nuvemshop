@@ -7,11 +7,6 @@ from src.banco import criar_banco
 from src.checkout_api import checkout_bp
 from src.webhook import webhook_bp
 
-print("=" * 80)
-print("APP.PY CARREGADO")
-print(__file__)
-print("=" * 80)
-
 
 def criar_app() -> Flask:
     app = Flask(__name__)
@@ -49,34 +44,34 @@ def criar_app() -> Flask:
             }
         ), 200
 
-    print("ROTAS REGISTRADAS:")
-    print(app.url_map) 
-    return app
-
-@app.route("/scripts/checkout-validator.js", methods=["GET"])
-def checkout_validator():
-    return send_file(
-        os.path.join(
+    @app.route(
+        "/scripts/checkout-validator.js",
+        methods=["GET"],
+    )
+    def checkout_validator():
+        caminho = os.path.join(
             os.path.dirname(__file__),
             "checkout-validator",
             "dist",
             "main.js",
-        ),
-        mimetype="application/javascript",
-    )
+        )
+
+        return send_file(
+            caminho,
+            mimetype="application/javascript",
+        )
+
+    print("ROTAS REGISTRADAS:")
+    print(app.url_map)
+
+    return app
+
 
 app = criar_app()
 
 
 if __name__ == "__main__":
     porta = int(os.getenv("PORT", "5000"))
-
-    print("=" * 60)
-    print("Servidor iniciado")
-    print(f"Porta: {porta}")
-    print("Painel: /admin/")
-    print("Webhook: /webhooks/pedidos")
-    print("=" * 60)
 
     app.run(
         host="0.0.0.0",
