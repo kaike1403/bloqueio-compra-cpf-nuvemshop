@@ -44,15 +44,13 @@ def criar_app() -> Flask:
         return jsonify(
             {
                 "status": "ok",
+                "versao": "checkout-cpf-053b773",
+                "checkout_endpoint": "/api/validar-checkout",
             }
         ), 200
 
     print("ROTAS REGISTRADAS:")
     print(app.url_map)
-    
-    print("ROTAS REGISTRADAS:")
-    print(app.url_map)
-    return app
 
 
 app = criar_app()
