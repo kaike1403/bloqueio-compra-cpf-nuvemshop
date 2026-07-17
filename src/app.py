@@ -50,7 +50,9 @@ def criar_app() -> Flask:
         ), 200
 
     print("ROTAS REGISTRADAS:")
-    print(app.url_map)
+    print(app.url_map) 
+    return app
+
 
 
 app = criar_app()
