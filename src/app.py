@@ -68,10 +68,26 @@ if __name__ == "__main__":
         debug=False,
     )
     
-app = Flask(__name__)
+app = criar_app()
 
-@app.route("/health")
-def health():
-    return {
-        "status": "ok"
-    }, 200
+
+if __name__ == "__main__":
+    porta = int(
+        os.getenv(
+            "PORT",
+            "5000",
+        )
+    )
+
+    print("=" * 60)
+    print("Servidor iniciado")
+    print(f"Porta: {porta}")
+    print("Painel: /admin/")
+    print("Webhook: /webhooks/pedidos")
+    print("=" * 60)
+
+    app.run(
+        host="0.0.0.0",
+        port=porta,
+        debug=False,
+    )
