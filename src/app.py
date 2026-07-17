@@ -47,7 +47,9 @@ def criar_app() -> Flask:
 
     print("ROTAS REGISTRADAS:")
     print(app.url_map)
-
+    
+    print("ROTAS REGISTRADAS:")
+    print(app.url_map)
     return app
 
 
