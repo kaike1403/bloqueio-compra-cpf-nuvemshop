@@ -8,7 +8,7 @@ from src.webhook import webhook_bp
 
 
 def criar_app() -> Flask:
-    app = Flask(__name__)
+    app = criar_app()
 
     app.secret_key = os.getenv(
         "FLASK_SECRET_KEY",
