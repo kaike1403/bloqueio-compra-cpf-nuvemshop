@@ -1,6 +1,6 @@
 import os
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, send_file
 
 from src.admin import admin_bp
 from src.banco import criar_banco
@@ -53,7 +53,17 @@ def criar_app() -> Flask:
     print(app.url_map) 
     return app
 
-
+@app.route("/scripts/checkout-validator.js", methods=["GET"])
+def checkout_validator():
+    return send_file(
+        os.path.join(
+            os.path.dirname(__file__),
+            "checkout-validator",
+            "dist",
+            "main.js",
+        ),
+        mimetype="application/javascript",
+    )
 
 app = criar_app()
 
