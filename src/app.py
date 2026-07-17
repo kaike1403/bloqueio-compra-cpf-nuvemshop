@@ -6,9 +6,14 @@ from src.admin import admin_bp
 from src.banco import criar_banco
 from src.webhook import webhook_bp
 
+print("=" * 80)
+print("APP.PY CARREGADO")
+print(__file__)
+print("=" * 80)
+
 
 def criar_app() -> Flask:
-    app = criar_app()
+    app = Flask(__name__)
 
     app.secret_key = os.getenv(
         "FLASK_SECRET_KEY",
@@ -17,7 +22,6 @@ def criar_app() -> Flask:
 
     criar_banco()
 
-    # Registra as rotas do sistema
     app.register_blueprint(webhook_bp)
     app.register_blueprint(admin_bp)
 
@@ -41,6 +45,9 @@ def criar_app() -> Flask:
             }
         ), 200
 
+    print("ROTAS REGISTRADAS:")
+    print(app.url_map)
+
     return app
 
 
@@ -48,36 +55,7 @@ app = criar_app()
 
 
 if __name__ == "__main__":
-    porta = int(
-        os.getenv(
-            "PORT",
-            "5000",
-        )
-    )
-
-    print("=" * 60)
-    print("Servidor iniciado")
-    print(f"Porta: {porta}")
-    print("Painel: /admin/")
-    print("Webhook: /webhooks/pedidos")
-    print("=" * 60)
-
-    app.run(
-        host="0.0.0.0",
-        port=porta,
-        debug=False,
-    )
-    
-app = criar_app()
-
-
-if __name__ == "__main__":
-    porta = int(
-        os.getenv(
-            "PORT",
-            "5000",
-        )
-    )
+    porta = int(os.getenv("PORT", "5000"))
 
     print("=" * 60)
     print("Servidor iniciado")
