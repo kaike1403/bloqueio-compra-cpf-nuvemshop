@@ -35,12 +35,10 @@ export function App(nube) {
     async function validarCheckout() {
         const numeroValidacao = ++contadorValidacao;
         const estado = nube.getState();
+        console.log("[Bloqueio CPF] Itens completos do carrinho:", estado.cart.items);
+        console.log("[Bloqueio CPF] Cliente completo:", estado.customer);
         const cpf = limparCpf(estado.customer?.billing_address?.id_number);
         const itens = estado.cart.items.map((item) => ({
-            /*
-             * No estado do NubeSDK, item.id representa o produto
-             * presente no carrinho.
-             */
             product_id: String(item.id),
             variant_id: "",
             quantity: Number(item.quantity ?? 0),
