@@ -25,3 +25,18 @@ env/
 # Sistema operacional
 .DS_Store
 Thumbs.db
+.env
+.env.*
+!.env.example
+
+__pycache__/
+*.pyc
+
+banco/*.db
+banco/*.sqlite
+banco/*.sqlite3
+
+node_modules/
+checkout-validator/dist/
+
+*.log
