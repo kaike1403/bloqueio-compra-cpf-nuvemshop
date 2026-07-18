@@ -1,7 +1,9 @@
 from typing import Any
+import hmac
 
 from flask import Blueprint, jsonify, request
 
+from src.config import STORE_ID, WEBHOOK_SECRET
 from src.processador import processar_pedido
 
 
@@ -27,6 +29,19 @@ def extrair_id_do_evento(
     methods=["POST"],
 )
 def receber_webhook_pedido():
+    if WEBHOOK_SECRET:
+        segredo_recebido = request.headers.get(
+            "X-Webhook-Secret",
+            "",
+        )
+        if not hmac.compare_digest(
+            segredo_recebido,
+            WEBHOOK_SECRET,
+        ):
+            return jsonify(
+                {"sucesso": False, "erro": "Webhook não autorizado"}
+            ), 401
+
     dados = request.get_json(silent=True)
 
     if not isinstance(dados, dict):
@@ -36,6 +51,11 @@ def receber_webhook_pedido():
                 "erro": "JSON inválido",
             }
         ), 400
+
+    if STORE_ID and str(dados.get("store_id")) != str(STORE_ID):
+        return jsonify(
+            {"sucesso": False, "erro": "Loja inválida"}
+        ), 403
 
     print("\n" + "=" * 70)
     print("WEBHOOK RECEBIDO")

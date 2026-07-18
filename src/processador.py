@@ -3,8 +3,10 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from src.banco import (
     atualizar_cancelamentos_do_pedido,
+    atualizar_compra_do_pedido,
+    atualizar_status_compras_do_pedido,
+    buscar_compras_do_dia,
     compra_do_mesmo_pedido_existe,
-    compra_ja_existe,
     criar_banco,
     registrar_cancelamento_pendente,
     registrar_compra,
@@ -244,6 +246,12 @@ def processar_pedido(
     )
 
     if pedido_cancelado(pedido):
+        atualizar_status_compras_do_pedido(
+            pedido_id=pedido.get("id"),
+            status_pedido=pedido.get("status"),
+            status_pagamento=pedido.get("payment_status"),
+        )
+
         mensagem = "Pedido já está cancelado."
 
         print(mensagem)
@@ -458,9 +466,22 @@ def processar_pedido(
         )
 
         if mesmo_pedido_ja_registrado:
+            atualizar_compra_do_pedido(
+                pedido_id=pedido.get("id"),
+                produto_id=produto_id,
+                status_pedido=pedido.get("status"),
+                status_pagamento=pedido.get("payment_status"),
+                pedido_criado_em=pedido_criado_em,
+                data_pedido=data_pedido,
+                quantidade=quantidade,
+                variante_id=variante_id,
+                sku=sku,
+                nome_produto=nome,
+            )
+
             print(
                 "REPROCESSAMENTO: este produto já foi registrado "
-                "pelo mesmo pedido."
+                "pelo mesmo pedido e teve os status atualizados."
             )
 
             resultado["reprocessamento"] = True
@@ -477,10 +498,13 @@ def processar_pedido(
             )
             continue
 
-        duplicado = compra_ja_existe(
+        compras_anteriores = buscar_compras_do_dia(
             cpf=cpf,
             produto_id=produto_id,
+            data_pedido=data_pedido,
+            excluir_pedido_id=pedido.get("id"),
         )
+        duplicado = bool(compras_anteriores)
 
         if duplicado:
             print(
@@ -501,7 +525,7 @@ def processar_pedido(
             )
             registrar_log(
                 resultado="duplicado",
-                motivo="CPF já comprou este produto em outro pedido",
+                motivo="CPF já comprou este produto em outro pedido no mesmo dia",
                 pedido_id=pedido.get("id"),
                 numero_pedido=numero_pedido,
                 cpf=cpf,

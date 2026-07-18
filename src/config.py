@@ -81,3 +81,14 @@ MODO_AUTOMATICO = (
         "false",
     ).strip().lower() == "true"
 )
+
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "").strip()
+
+CORS_ORIGINS = [
+    origem.strip()
+    for origem in os.getenv(
+        "CORS_ORIGINS",
+        "https://gdlp.com.br,https://www.gdlp.com.br",
+    ).split(",")
+    if origem.strip()
+]

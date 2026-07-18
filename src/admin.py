@@ -29,11 +29,19 @@ from src.produtos_controlados import (
 )
 
 
+from src.seguranca import proteger_admin
+
+
 admin_bp = Blueprint(
     "admin",
     __name__,
     url_prefix="/admin",
 )
+
+
+@admin_bp.before_request
+def exigir_autenticacao_admin():
+    return proteger_admin()
 
 
 def listar_compras_com_filtro(

@@ -1,3 +1,4 @@
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -6,9 +7,14 @@ from typing import Any
 
 PASTA_RAIZ = Path(__file__).resolve().parent.parent
 PASTA_BANCO = PASTA_RAIZ / "banco"
-PASTA_BANCO.mkdir(parents=True, exist_ok=True)
 
-CAMINHO_BANCO = PASTA_BANCO / "compras.db"
+_caminho_configurado = os.getenv("DATABASE_PATH", "").strip()
+CAMINHO_BANCO = (
+    Path(_caminho_configurado).expanduser()
+    if _caminho_configurado
+    else PASTA_BANCO / "compras.db"
+)
+CAMINHO_BANCO.parent.mkdir(parents=True, exist_ok=True)
 
 def listar_logs(
     limite: int = 500,
@@ -350,8 +356,8 @@ def criar_banco() -> None:
                 numero_pedido TEXT,
                 status_pedido TEXT,
                 status_pagamento TEXT,
-                pedido_criado_em TEXT NOT NULL,
-                data_pedido TEXT NOT NULL,
+                pedido_criado_em TEXT,
+                data_pedido TEXT,
                 criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
 
                 UNIQUE(pedido_id, produto_id)
@@ -393,6 +399,44 @@ def criar_banco() -> None:
                 atualizado_em TEXT DEFAULT CURRENT_TIMESTAMP,
 
                 UNIQUE(pedido_id, produto_id)
+            )
+            """
+        )
+
+        # Migração compatível com bancos criados por versões antigas.
+        colunas_compras = {
+            linha["name"]
+            for linha in conexao.execute(
+                "PRAGMA table_info(compras)"
+            ).fetchall()
+        }
+
+        if "pedido_criado_em" not in colunas_compras:
+            conexao.execute(
+                "ALTER TABLE compras ADD COLUMN pedido_criado_em TEXT"
+            )
+
+        if "data_pedido" not in colunas_compras:
+            conexao.execute(
+                "ALTER TABLE compras ADD COLUMN data_pedido TEXT"
+            )
+
+        conexao.execute(
+            """
+            UPDATE compras
+            SET pedido_criado_em = COALESCE(
+                NULLIF(pedido_criado_em, ''),
+                criado_em
+            )
+            """
+        )
+        conexao.execute(
+            """
+            UPDATE compras
+            SET data_pedido = COALESCE(
+                NULLIF(data_pedido, ''),
+                DATE(NULLIF(pedido_criado_em, '')),
+                DATE(criado_em)
             )
             """
         )
@@ -491,6 +535,87 @@ def compra_do_mesmo_pedido_existe(
 
     return resultado is not None
 
+def atualizar_compra_do_pedido(
+    pedido_id: int | str,
+    produto_id: int | str,
+    *,
+    status_pedido: str | None = None,
+    status_pagamento: str | None = None,
+    pedido_criado_em: str | None = None,
+    data_pedido: str | None = None,
+    quantidade: int | None = None,
+    variante_id: int | str | None = None,
+    sku: str | None = None,
+    nome_produto: str | None = None,
+) -> int:
+    """Atualiza um item já registrado quando chega order/updated."""
+
+    criar_banco()
+
+    with conectar() as conexao:
+        cursor = conexao.execute(
+            """
+            UPDATE compras
+            SET
+                status_pedido = COALESCE(?, status_pedido),
+                status_pagamento = COALESCE(?, status_pagamento),
+                pedido_criado_em = COALESCE(NULLIF(?, ''), pedido_criado_em),
+                data_pedido = COALESCE(NULLIF(?, ''), data_pedido),
+                quantidade = COALESCE(?, quantidade),
+                variante_id = COALESCE(?, variante_id),
+                sku = COALESCE(?, sku),
+                nome_produto = COALESCE(?, nome_produto)
+            WHERE pedido_id = ?
+              AND CAST(produto_id AS TEXT) = ?
+            """,
+            (
+                status_pedido,
+                status_pagamento,
+                pedido_criado_em,
+                data_pedido,
+                quantidade,
+                str(variante_id) if variante_id is not None else None,
+                sku,
+                nome_produto,
+                str(pedido_id),
+                str(produto_id),
+            ),
+        )
+        conexao.commit()
+
+    return cursor.rowcount
+
+
+def atualizar_status_compras_do_pedido(
+    pedido_id: int | str,
+    *,
+    status_pedido: str | None = None,
+    status_pagamento: str | None = None,
+) -> int:
+    """Atualiza o status de todos os itens de um pedido."""
+
+    criar_banco()
+
+    with conectar() as conexao:
+        cursor = conexao.execute(
+            """
+            UPDATE compras
+            SET
+                status_pedido = COALESCE(?, status_pedido),
+                status_pagamento = COALESCE(?, status_pagamento)
+            WHERE pedido_id = ?
+            """,
+            (
+                status_pedido,
+                status_pagamento,
+                str(pedido_id),
+            ),
+        )
+        conexao.commit()
+
+    return cursor.rowcount
+
+
 def compra_ja_existe(
     cpf: str,
     produto_id: int | str,
@@ -536,13 +661,23 @@ def buscar_compras_do_dia(
 
     cpf_limpo = normalizar_cpf(cpf)
 
+    criar_banco()
+
     consulta = """
         SELECT *
         FROM compras
         WHERE cpf = ?
-          AND produto_id = ?
-          AND data_pedido = ?
-          AND status_pedido != 'cancelled'
+          AND CAST(produto_id AS TEXT) = ?
+          AND COALESCE(
+                NULLIF(data_pedido, ''),
+                DATE(NULLIF(pedido_criado_em, '')),
+                DATE(criado_em)
+              ) = ?
+          AND LOWER(COALESCE(status_pedido, '')) NOT IN (
+                'cancelled',
+                'canceled',
+                'cancelado'
+              )
     """
 
     parametros: list[Any] = [
@@ -561,7 +696,10 @@ def buscar_compras_do_dia(
         )
 
     consulta += """
-        ORDER BY pedido_criado_em ASC, id ASC
+        ORDER BY COALESCE(
+            NULLIF(pedido_criado_em, ''),
+            criado_em
+        ) ASC, id ASC
     """
 
     with conectar() as conexao:
@@ -610,7 +748,11 @@ def buscar_compra_paga_do_dia(
             FROM compras
             WHERE cpf = ?
               AND CAST(produto_id AS TEXT) = ?
-              AND DATE(criado_em) = ?
+              AND COALESCE(
+                    NULLIF(data_pedido, ''),
+                    DATE(NULLIF(pedido_criado_em, '')),
+                    DATE(criado_em)
+                  ) = ?
               AND LOWER(
                     COALESCE(status_pagamento, '')
                   ) = 'paid'

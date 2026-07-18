@@ -1,0 +1,14 @@
+{
+  "name": "checkout-validator",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit false --outDir dist",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@tiendanube/nube-sdk-types": "latest",
+    "typescript": "^5.0.0"
+  }
+}

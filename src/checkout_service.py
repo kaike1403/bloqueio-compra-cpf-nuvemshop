@@ -50,6 +50,26 @@ def normalizar_produto_id(valor: Any) -> str:
     return str(valor).strip()
 
 
+def cpf_valido(cpf: str) -> bool:
+    """Valida tamanho, repetição e dígitos verificadores do CPF."""
+
+    if len(cpf) != 11 or cpf == cpf[0] * 11:
+        return False
+
+    for tamanho in (9, 10):
+        soma = sum(
+            int(cpf[indice]) * (tamanho + 1 - indice)
+            for indice in range(tamanho)
+        )
+        digito = (soma * 10) % 11
+        if digito == 10:
+            digito = 0
+        if digito != int(cpf[tamanho]):
+            return False
+
+    return True
+
+
 def validar_checkout(
     dados: dict[str, Any] | None,
 ) -> dict[str, Any]:
@@ -187,7 +207,7 @@ def validar_checkout(
             ),
         }
 
-    if len(cpf) != 11:
+    if not cpf_valido(cpf):
         return {
             "allowed": False,
             "code": "INVALID_CPF",

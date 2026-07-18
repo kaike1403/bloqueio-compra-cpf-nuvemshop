@@ -1,15 +1,23 @@
 import os
 
-from flask import Flask, jsonify, send_file
+from flask import Flask, jsonify
+from flask_cors import CORS
 
 from src.admin import admin_bp
 from src.banco import criar_banco
 from src.checkout_api import checkout_bp
+from src.config import CORS_ORIGINS
 from src.webhook import webhook_bp
 
 
 def criar_app() -> Flask:
     app = Flask(__name__)
+    CORS(
+        app,
+        resources={
+            r"/api/*": {"origins": CORS_ORIGINS},
+        },
+    )
 
     app.secret_key = os.getenv(
         "FLASK_SECRET_KEY",
@@ -43,23 +51,6 @@ def criar_app() -> Flask:
                 "checkout_endpoint": "/api/validar-checkout",
             }
         ), 200
-
-    @app.route(
-        "/scripts/checkout-validator.js",
-        methods=["GET"],
-    )
-    def checkout_validator():
-        caminho = os.path.join(
-            os.path.dirname(__file__),
-            "checkout-validator",
-            "dist",
-            "main.js",
-        )
-
-        return send_file(
-            caminho,
-            mimetype="application/javascript",
-        )
 
     print("ROTAS REGISTRADAS:")
     print(app.url_map)

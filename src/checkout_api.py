@@ -29,7 +29,7 @@ def validar_checkout_endpoint():
     if request.method == "OPTIONS":
         resposta = jsonify({"ok": True})
         resposta.status_code = 204
-        return adicionar_cabecalhos_cors(resposta)
+        return resposta
 
     dados = request.get_json(silent=True)
 

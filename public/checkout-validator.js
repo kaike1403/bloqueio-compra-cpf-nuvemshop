@@ -56,6 +56,8 @@ export function App(nube) {
         }
         ultimaChaveValidada = chaveAtual;
         validacaoEmAndamento = true;
+        const controlador = new AbortController();
+        const temporizador = setTimeout(() => controlador.abort(), 10000);
         try {
             const resposta = await fetch(API_URL, {
                 method: "POST",
@@ -66,6 +68,7 @@ export function App(nube) {
                     cpf,
                     items: itens,
                 }),
+                signal: controlador.signal,
             });
             if (!resposta.ok) {
                 throw new Error(`Erro HTTP ${resposta.status}`);
@@ -95,6 +98,7 @@ export function App(nube) {
             enviarResultado(nube, false, "Não foi possível validar esta compra agora. Aguarde alguns segundos e tente novamente.");
         }
         finally {
+            clearTimeout(temporizador);
             if (numeroValidacao === contadorValidacao) {
                 validacaoEmAndamento = false;
             }
