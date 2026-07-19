@@ -183,12 +183,6 @@ def validar_checkout(
                 "É permitida apenas 1 unidade entre os "
                 "produtos deste lançamento."
             ),
-            "controlled_quantity": (
-                quantidade_total_controlada
-            ),
-            "controlled_products": (
-                produtos_controlados
-            ),
         }
 
     # A quantidade pode ser validada mesmo sem CPF.
@@ -202,9 +196,6 @@ def validar_checkout(
                 "Aguardando o preenchimento do CPF "
                 "para concluir a validação."
             ),
-            "controlled_products": (
-                produtos_controlados
-            ),
         }
 
     if not cpf_valido(cpf):
@@ -214,9 +205,6 @@ def validar_checkout(
             "message": (
                 "Informe um CPF válido para continuar "
                 "a compra."
-            ),
-            "controlled_products": (
-                produtos_controlados
             ),
         }
 
@@ -239,24 +227,6 @@ def validar_checkout(
                     "Este CPF já possui uma compra paga "
                     "deste produto."
                 ),
-                "blocked_product": produto,
-                "existing_order": {
-                    "pedido_id": compra_paga.get(
-                        "pedido_id"
-                    ),
-                    "numero_pedido": compra_paga.get(
-                        "numero_pedido"
-                    ),
-                    "payment_status": compra_paga.get(
-                        "status_pagamento"
-                    ),
-                    "order_status": compra_paga.get(
-                        "status_pedido"
-                    ),
-                    "order_date": compra_paga.get(
-                        "criado_em"
-                    ),
-                },
             }
 
     # Pedidos pendentes não bloqueiam o checkout.
@@ -264,6 +234,4 @@ def validar_checkout(
         "allowed": True,
         "code": "CHECKOUT_ALLOWED",
         "message": "Compra liberada.",
-        "cpf": cpf,
-        "controlled_products": produtos_controlados,
     }

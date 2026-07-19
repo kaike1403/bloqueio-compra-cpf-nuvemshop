@@ -140,8 +140,8 @@ export function App(nube: NubeSDK): void {
       );
 
       console.log(
-        "[Bloqueio CPF] Resultado:",
-        resultado,
+        "[Bloqueio CPF] Validação:",
+        resultado.code ?? "SEM_CODIGO",
       );
     } catch (erro) {
       console.error(
@@ -158,11 +158,9 @@ export function App(nube: NubeSDK): void {
        * localmente quais produtos são controlados, bloqueamos
        * apenas até que a API volte a responder.
        */
-      enviarResultado(
-        nube,
-        false,
-        "Não foi possível validar esta compra agora. Aguarde alguns segundos e tente novamente.",
-      );
+      // Fail-open: uma indisponibilidade do backend não paralisa a loja.
+      enviarResultado(nube, true);
+      ultimaChaveValidada = "";
     } finally {
       clearTimeout(temporizador);
 

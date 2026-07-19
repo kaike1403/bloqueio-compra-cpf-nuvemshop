@@ -5,7 +5,7 @@ from flask_cors import CORS
 
 from src.admin import admin_bp
 from src.banco import criar_banco
-from src.checkout_api import checkout_bp
+from src.checkout_api import checkout_bp, limiter
 from src.config import CORS_ORIGINS
 from src.webhook import webhook_bp
 
@@ -19,10 +19,18 @@ def criar_app() -> Flask:
         },
     )
 
-    app.secret_key = os.getenv(
-        "FLASK_SECRET_KEY",
-        "chave-temporaria-desenvolvimento",
+    app.secret_key = os.getenv("FLASK_SECRET_KEY", "").strip()
+    if not app.secret_key:
+        raise RuntimeError("FLASK_SECRET_KEY não configurada.")
+
+    app.config.update(
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SECURE=True,
+        SESSION_COOKIE_SAMESITE="Lax",
+        MAX_CONTENT_LENGTH=32_768,
     )
+
+    limiter.init_app(app)
 
     criar_banco()
 
@@ -51,9 +59,6 @@ def criar_app() -> Flask:
                 "checkout_endpoint": "/api/validar-checkout",
             }
         ), 200
-
-    print("ROTAS REGISTRADAS:")
-    print(app.url_map)
 
     return app
 

@@ -330,6 +330,7 @@
                     'admin.adicionar_produto'
                 ) }}"
             >
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <div>
                     <label for="produto_id">
                         Product ID
@@ -444,6 +445,7 @@
                                                 produto_id=produto.produto_id
                                             ) }}"
                                         >
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                             <button
                                                 class="botao-desativar"
                                                 type="submit"
@@ -459,6 +461,7 @@
                                                 produto_id=produto.produto_id
                                             ) }}"
                                         >
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                             <button
                                                 class="botao-ativar"
                                                 type="submit"
@@ -492,6 +495,7 @@
                 method="get"
                 action="{{ url_for('admin.painel') }}"
             >
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input
                     name="pesquisa"
                     value="{{ pesquisa }}"
@@ -644,6 +648,7 @@
                                                     cancelamento_id=cancelamento.id
                                                 ) }}"
                                             >
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                                 <button
                                                     class="botao-desativar"
                                                     type="submit"
@@ -659,6 +664,7 @@
                                                     cancelamento_id=cancelamento.id
                                                 ) }}"
                                             >
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                                 <button
                                                     class="botao-ativar"
                                                     type="submit"

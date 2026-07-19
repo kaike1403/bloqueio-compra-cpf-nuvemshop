@@ -1,65 +1,32 @@
 from __future__ import annotations
 
 from flask import Blueprint, jsonify, request
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 from src.checkout_service import validar_checkout
 
 
-checkout_bp = Blueprint(
-    "checkout",
-    __name__,
-    url_prefix="/api",
-)
+checkout_bp = Blueprint("checkout", __name__, url_prefix="/api")
+limiter = Limiter(key_func=get_remote_address, default_limits=[])
 
 
-@checkout_bp.route(
-    "/validar-checkout",
-    methods=["POST", "OPTIONS"],
-)
+@checkout_bp.route("/validar-checkout", methods=["POST", "OPTIONS"])
+@limiter.limit("60 per minute")
 def validar_checkout_endpoint():
-    """
-    Recebe os dados do checkout e verifica se a compra
-    pode continuar.
-
-    Endpoint:
-        POST /api/validar-checkout
-    """
-
-    # Resposta para a verificação prévia de CORS.
+    """Valida CPF e itens do checkout sem expor dados sensíveis."""
     if request.method == "OPTIONS":
-        resposta = jsonify({"ok": True})
-        resposta.status_code = 204
-        return resposta
+        return ("", 204)
+
+    if request.content_length and request.content_length > 32_768:
+        return jsonify({
+            "allowed": False,
+            "code": "PAYLOAD_TOO_LARGE",
+            "message": "A solicitação enviada é muito grande.",
+        }), 413
 
     dados = request.get_json(silent=True)
-
     resultado = validar_checkout(dados)
 
-    status_http = 200
-
-    if resultado.get("code") == "INVALID_PAYLOAD":
-        status_http = 400
-
-    resposta = jsonify(resultado)
-    resposta.status_code = status_http
-
-    return adicionar_cabecalhos_cors(resposta)
-
-
-def adicionar_cabecalhos_cors(resposta):
-    """
-    Libera temporariamente chamadas externas durante os testes.
-
-    Posteriormente restringiremos para os domínios oficiais
-    da Guadalupe e da Nuvemshop.
-    """
-
-    resposta.headers["Access-Control-Allow-Origin"] = "*"
-    resposta.headers["Access-Control-Allow-Headers"] = (
-        "Content-Type, Authorization"
-    )
-    resposta.headers["Access-Control-Allow-Methods"] = (
-        "POST, OPTIONS"
-    )
-
-    return resposta
+    status_http = 400 if resultado.get("code") == "INVALID_PAYLOAD" else 200
+    return jsonify(resultado), status_http

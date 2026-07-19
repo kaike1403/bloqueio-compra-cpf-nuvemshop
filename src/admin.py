@@ -29,7 +29,7 @@ from src.produtos_controlados import (
 )
 
 
-from src.seguranca import proteger_admin
+from src.seguranca import obter_token_csrf, proteger_admin, validar_csrf_admin
 
 
 admin_bp = Blueprint(
@@ -41,7 +41,16 @@ admin_bp = Blueprint(
 
 @admin_bp.before_request
 def exigir_autenticacao_admin():
-    return proteger_admin()
+    resposta = proteger_admin()
+    if resposta is not None:
+        return resposta
+    validar_csrf_admin()
+    return None
+
+
+@admin_bp.app_context_processor
+def disponibilizar_csrf():
+    return {"csrf_token": obter_token_csrf()}
 
 
 def listar_compras_com_filtro(
