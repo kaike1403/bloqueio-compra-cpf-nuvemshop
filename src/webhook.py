@@ -25,6 +25,9 @@ def receber_webhook_pedido():
         logger.error("WEBHOOK_SECRET não configurado")
         return jsonify({"sucesso": False, "erro": "Webhook indisponível"}), 503
 
+    logger.info("Headers recebidos: %s", dict(request.headers))
+
+    segredo_recebido = request.headers.get("X-Webhook-Secret", "")
 
     if not segredo_recebido or not hmac.compare_digest(
         segredo_recebido, WEBHOOK_SECRET
