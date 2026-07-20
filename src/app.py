@@ -2,7 +2,7 @@ import os
 
 from flask import Flask, jsonify
 from flask_cors import CORS
-
+from src.lgpd import lgpd_bp
 from src.admin import admin_bp
 from src.banco import criar_banco
 from src.checkout_api import checkout_bp, limiter
@@ -37,6 +37,7 @@ def criar_app() -> Flask:
     app.register_blueprint(webhook_bp)
     app.register_blueprint(admin_bp)
     app.register_blueprint(checkout_bp)
+    app.register_blueprint(lgpd_bp)
 
     @app.route("/", methods=["GET"])
     def inicio():
