@@ -92,3 +92,7 @@ CORS_ORIGINS = [
     ).split(",")
     if origem.strip()
 ]
+NUVEMSHOP_APP_SECRET = os.getenv(
+    "NUVEMSHOP_APP_SECRET",
+    "",
+).strip()

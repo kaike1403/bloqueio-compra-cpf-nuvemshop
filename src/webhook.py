@@ -1,10 +1,11 @@
 from typing import Any
+import hashlib
 import hmac
 import logging
 
 from flask import Blueprint, jsonify, request
 
-from src.config import STORE_ID, WEBHOOK_SECRET
+from src.config import NUVEMSHOP_APP_SECRET, STORE_ID
 from src.processador import processar_pedido
 
 
@@ -17,8 +18,28 @@ def extrair_id_do_evento(dados: dict[str, Any]) -> str:
     return "" if pedido_id is None else str(pedido_id).strip()
 
 
+def assinatura_valida(
+    corpo_bruto: bytes,
+    assinatura_recebida: str,
+) -> bool:
+    if not NUVEMSHOP_APP_SECRET or not assinatura_recebida:
+        return False
+
+    assinatura_calculada = hmac.new(
+        NUVEMSHOP_APP_SECRET.encode("utf-8"),
+        corpo_bruto,
+        hashlib.sha256,
+    ).hexdigest()
+
+    return hmac.compare_digest(
+        assinatura_calculada.lower(),
+        assinatura_recebida.strip().lower(),
+    )
+
+
 @webhook_bp.route("/webhooks/pedidos", methods=["POST"])
 def receber_webhook_pedido():
+<<<<<<< HEAD
     # A Nuvemshop permite cadastrar cabeçalhos customizados no webhook.
     # O segredo deve ser obrigatório no Render e igual ao cadastrado no webhook.
     if not WEBHOOK_SECRET:
@@ -34,35 +55,103 @@ def receber_webhook_pedido():
     ):
         logger.warning("Tentativa de webhook não autorizada")
         return jsonify({"sucesso": False, "erro": "Webhook não autorizado"}), 401
+=======
+    if not NUVEMSHOP_APP_SECRET:
+        logger.error("NUVEMSHOP_APP_SECRET não configurado")
+        return jsonify(
+            {
+                "sucesso": False,
+                "erro": "Webhook indisponível",
+            }
+        ), 503
+>>>>>>> 92954ab (Corrige autenticacao HMAC dos webhooks)
 
     if request.content_length and request.content_length > 16_384:
-        return jsonify({"sucesso": False, "erro": "Payload muito grande"}), 413
+        return jsonify(
+            {
+                "sucesso": False,
+                "erro": "Payload muito grande",
+            }
+        ), 413
+
+    corpo_bruto = request.get_data(cache=True)
+
+    assinatura_recebida = request.headers.get(
+        "x-linkedstore-hmac-sha256",
+        "",
+    )
+
+    if not assinatura_valida(corpo_bruto, assinatura_recebida):
+        logger.warning("Assinatura HMAC do webhook inválida")
+        return jsonify(
+            {
+                "sucesso": False,
+                "erro": "Webhook não autorizado",
+            }
+        ), 401
 
     dados = request.get_json(silent=True)
+
     if not isinstance(dados, dict):
-        return jsonify({"sucesso": False, "erro": "JSON inválido"}), 400
+        return jsonify(
+            {
+                "sucesso": False,
+                "erro": "JSON inválido",
+            }
+        ), 400
 
     if STORE_ID and str(dados.get("store_id")) != str(STORE_ID):
         logger.warning("Webhook recebido para loja diferente")
-        return jsonify({"sucesso": False, "erro": "Loja inválida"}), 403
+        return jsonify(
+            {
+                "sucesso": False,
+                "erro": "Loja inválida",
+            }
+        ), 403
 
     evento = str(dados.get("event", "")).strip()
+
     if evento not in {"order/created", "order/updated"}:
-        return jsonify({"sucesso": True, "mensagem": "Evento ignorado"}), 200
+        return jsonify(
+            {
+                "sucesso": True,
+                "mensagem": "Evento ignorado",
+            }
+        ), 200
 
     pedido_id = extrair_id_do_evento(dados)
+
     if not pedido_id:
-        return jsonify({"sucesso": False, "erro": "ID do pedido ausente"}), 400
+        return jsonify(
+            {
+                "sucesso": False,
+                "erro": "ID do pedido ausente",
+            }
+        ), 400
 
     try:
-        resultado = processar_pedido(pedido_id=pedido_id, registrar_no_banco=True)
+        resultado = processar_pedido(
+            pedido_id=pedido_id,
+            registrar_no_banco=True,
+        )
     except Exception:
-        logger.exception("Erro ao processar webhook do pedido %s", pedido_id)
-        return jsonify({"sucesso": False, "erro": "Erro interno"}), 500
+        logger.exception(
+            "Erro ao processar webhook do pedido %s",
+            pedido_id,
+        )
+        return jsonify(
+            {
+                "sucesso": False,
+                "erro": "Erro interno",
+            }
+        ), 500
 
-    # Não devolve detalhes internos do processamento ao chamador.
-    return jsonify({
-        "sucesso": True,
-        "pedido_id": pedido_id,
-        "reprocessamento": bool(resultado.get("reprocessamento")),
-    }), 200
+    return jsonify(
+        {
+            "sucesso": True,
+            "pedido_id": pedido_id,
+            "reprocessamento": bool(
+                resultado.get("reprocessamento")
+            ),
+        }
+    ), 200
