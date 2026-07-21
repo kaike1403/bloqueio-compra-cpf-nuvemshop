@@ -1,4 +1,5 @@
 from typing import Any
+import base64
 import hashlib
 import hmac
 import logging
@@ -15,33 +16,66 @@ webhook_bp = Blueprint("webhook", __name__)
 
 def extrair_id_do_evento(dados: dict[str, Any]) -> str:
     pedido_id = dados.get("id")
-    return "" if pedido_id is None else str(pedido_id).strip()
+
+    if pedido_id is None:
+        return ""
+
+    return str(pedido_id).strip()
 
 
 def assinatura_valida(
     corpo_bruto: bytes,
     assinatura_recebida: str,
 ) -> bool:
-    if not NUVEMSHOP_APP_SECRET or not assinatura_recebida:
+    """
+    Valida a assinatura HMAC-SHA256 enviada pela Nuvemshop.
+
+    A assinatura principal é comparada em Base64.
+    Também é mantida uma comparação hexadecimal como compatibilidade.
+    """
+
+    segredo = str(NUVEMSHOP_APP_SECRET or "").strip()
+    assinatura = str(assinatura_recebida or "").strip()
+
+    if not segredo or not assinatura:
         return False
 
-    assinatura_calculada = hmac.new(
-        NUVEMSHOP_APP_SECRET.encode("utf-8"),
+    digest_bruto = hmac.new(
+        segredo.encode("utf-8"),
         corpo_bruto,
         hashlib.sha256,
-    ).hexdigest()
+    ).digest()
+
+    assinatura_base64 = base64.b64encode(
+        digest_bruto
+    ).decode("utf-8")
+
+    # Comparação principal: Base64
+    if hmac.compare_digest(
+        assinatura_base64,
+        assinatura,
+    ):
+        return True
+
+    # Compatibilidade caso o provedor envie hexadecimal
+    assinatura_hexadecimal = digest_bruto.hex()
 
     return hmac.compare_digest(
-        assinatura_calculada.lower(),
-        assinatura_recebida.strip().lower(),
+        assinatura_hexadecimal.lower(),
+        assinatura.lower(),
     )
 
 
-@webhook_bp.route("/webhooks/pedidos", methods=["POST"])
+@webhook_bp.route(
+    "/webhooks/pedidos",
+    methods=["POST"],
+)
 def receber_webhook_pedido():
-
     if not NUVEMSHOP_APP_SECRET:
-        logger.error("NUVEMSHOP_APP_SECRET não configurado")
+        logger.error(
+            "NUVEMSHOP_APP_SECRET não configurado"
+        )
+
         return jsonify(
             {
                 "sucesso": False,
@@ -49,8 +83,10 @@ def receber_webhook_pedido():
             }
         ), 503
 
-
-    if request.content_length and request.content_length > 16_384:
+    if (
+        request.content_length
+        and request.content_length > 16_384
+    ):
         return jsonify(
             {
                 "sucesso": False,
@@ -58,15 +94,31 @@ def receber_webhook_pedido():
             }
         ), 413
 
+    # É essencial validar o corpo bruto exatamente como recebido.
     corpo_bruto = request.get_data(cache=True)
 
     assinatura_recebida = request.headers.get(
-        "x-linkedstore-hmac-sha256",
+        "X-Linkedstore-Hmac-Sha256",
         "",
+    ).strip()
+
+    logger.info(
+        "Webhook recebido: assinatura_presente=%s, "
+        "tamanho_payload=%s",
+        bool(assinatura_recebida),
+        len(corpo_bruto),
     )
 
-    if not assinatura_valida(corpo_bruto, assinatura_recebida):
-        logger.warning("Assinatura HMAC do webhook inválida")
+    if not assinatura_valida(
+        corpo_bruto,
+        assinatura_recebida,
+    ):
+        logger.warning(
+            "Assinatura HMAC do webhook inválida. "
+            "Tamanho da assinatura recebida: %s",
+            len(assinatura_recebida),
+        )
+
         return jsonify(
             {
                 "sucesso": False,
@@ -84,8 +136,25 @@ def receber_webhook_pedido():
             }
         ), 400
 
-    if STORE_ID and str(dados.get("store_id")) != str(STORE_ID):
-        logger.warning("Webhook recebido para loja diferente")
+    store_id_recebido = str(
+        dados.get("store_id", "")
+    ).strip()
+
+    store_id_configurado = str(
+        STORE_ID or ""
+    ).strip()
+
+    if (
+        store_id_configurado
+        and store_id_recebido != store_id_configurado
+    ):
+        logger.warning(
+            "Webhook recebido para loja diferente. "
+            "Recebido=%s; configurado=%s",
+            store_id_recebido,
+            store_id_configurado,
+        )
+
         return jsonify(
             {
                 "sucesso": False,
@@ -93,9 +162,19 @@ def receber_webhook_pedido():
             }
         ), 403
 
-    evento = str(dados.get("event", "")).strip()
+    evento = str(
+        dados.get("event", "")
+    ).strip()
 
-    if evento not in {"order/created", "order/updated"}:
+    if evento not in {
+        "order/created",
+        "order/updated",
+    }:
+        logger.info(
+            "Evento ignorado: %s",
+            evento,
+        )
+
         return jsonify(
             {
                 "sucesso": True,
@@ -106,6 +185,11 @@ def receber_webhook_pedido():
     pedido_id = extrair_id_do_evento(dados)
 
     if not pedido_id:
+        logger.warning(
+            "Webhook sem ID de pedido: %s",
+            dados,
+        )
+
         return jsonify(
             {
                 "sucesso": False,
@@ -113,16 +197,24 @@ def receber_webhook_pedido():
             }
         ), 400
 
+    logger.info(
+        "Processando pedido %s pelo evento %s",
+        pedido_id,
+        evento,
+    )
+
     try:
         resultado = processar_pedido(
             pedido_id=pedido_id,
             registrar_no_banco=True,
         )
+
     except Exception:
         logger.exception(
             "Erro ao processar webhook do pedido %s",
             pedido_id,
         )
+
         return jsonify(
             {
                 "sucesso": False,
@@ -130,10 +222,16 @@ def receber_webhook_pedido():
             }
         ), 500
 
+    logger.info(
+        "Pedido %s processado com sucesso",
+        pedido_id,
+    )
+
     return jsonify(
         {
             "sucesso": True,
             "pedido_id": pedido_id,
+            "evento": evento,
             "reprocessamento": bool(
                 resultado.get("reprocessamento")
             ),
