@@ -39,23 +39,7 @@ def assinatura_valida(
 
 @webhook_bp.route("/webhooks/pedidos", methods=["POST"])
 def receber_webhook_pedido():
-<<<<<<< HEAD
-    # A Nuvemshop permite cadastrar cabeçalhos customizados no webhook.
-    # O segredo deve ser obrigatório no Render e igual ao cadastrado no webhook.
-    if not WEBHOOK_SECRET:
-        logger.error("WEBHOOK_SECRET não configurado")
-        return jsonify({"sucesso": False, "erro": "Webhook indisponível"}), 503
 
-    logger.info("Headers recebidos: %s", dict(request.headers))
-
-    segredo_recebido = request.headers.get("X-Webhook-Secret", "")
-
-    if not segredo_recebido or not hmac.compare_digest(
-        segredo_recebido, WEBHOOK_SECRET
-    ):
-        logger.warning("Tentativa de webhook não autorizada")
-        return jsonify({"sucesso": False, "erro": "Webhook não autorizado"}), 401
-=======
     if not NUVEMSHOP_APP_SECRET:
         logger.error("NUVEMSHOP_APP_SECRET não configurado")
         return jsonify(
@@ -64,7 +48,7 @@ def receber_webhook_pedido():
                 "erro": "Webhook indisponível",
             }
         ), 503
->>>>>>> 92954ab (Corrige autenticacao HMAC dos webhooks)
+
 
     if request.content_length and request.content_length > 16_384:
         return jsonify(
