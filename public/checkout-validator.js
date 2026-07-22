@@ -41,7 +41,8 @@ export function App(nube) {
     }));
     function obterSnapshot() {
         const estado = nube.getState();
-        const cpf = limparCpf(estado.customer?.billing_address?.id_number);
+        const cpf = limparCpf(estado.customer?.cpf_cnpj ??
+            estado.customer?.billing_address?.id_number);
         const itens = estado.cart.items.map((item) => ({
             product_id: String(item.product_id),
             variant_id: String(item.variant_id),
@@ -149,14 +150,15 @@ export function App(nube) {
                 console.error("[Bloqueio CPF] Erro ao consultar API:", erro);
             }
             /*
-             * Fail-closed: uma falha da API não pode liberar uma
-             * compra que deveria estar bloqueada.
+             * A compra permanece bloqueada durante toda a tentativa.
+             * Somente depois de timeout/erro real da API liberamos o
+             * checkout, conforme a regra operacional solicitada.
              */
             const resultadoIndisponivel = {
-                allowed: false,
-                code: "VALIDATION_UNAVAILABLE",
-                message: "Não foi possível validar esta compra agora. " +
-                    "Aguarde alguns segundos e tente novamente.",
+                allowed: true,
+                code: "VALIDATION_UNAVAILABLE_ALLOWED",
+                message: "A validação não respondeu dentro do prazo. " +
+                    "O checkout foi liberado.",
             };
             ultimaChaveValidada = snapshot.chave;
             ultimoResultado = resultadoIndisponivel;

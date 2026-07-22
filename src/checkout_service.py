@@ -190,7 +190,7 @@ def validar_checkout(
     # o preenchimento do documento.
     if not cpf:
         return {
-            "allowed": True,
+            "allowed": False,
             "code": "WAITING_FOR_CPF",
             "message": (
                 "Aguardando o preenchimento do CPF "

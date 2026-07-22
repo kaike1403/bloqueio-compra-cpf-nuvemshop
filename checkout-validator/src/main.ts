@@ -78,7 +78,8 @@ export function App(nube: NubeSDK): void {
     const estado = nube.getState();
 
     const cpf = limparCpf(
-      estado.customer?.billing_address?.id_number,
+      estado.customer?.cpf_cnpj ??
+        estado.customer?.billing_address?.id_number,
     );
 
     const itens: ItemCheckout[] = estado.cart.items.map(
@@ -243,15 +244,16 @@ export function App(nube: NubeSDK): void {
       }
 
       /*
-       * Fail-closed: uma falha da API não pode liberar uma
-       * compra que deveria estar bloqueada.
+       * A compra permanece bloqueada durante toda a tentativa.
+       * Somente depois de timeout/erro real da API liberamos o
+       * checkout, conforme a regra operacional solicitada.
        */
       const resultadoIndisponivel: RespostaValidacao = {
-        allowed: false,
-        code: "VALIDATION_UNAVAILABLE",
+        allowed: true,
+        code: "VALIDATION_UNAVAILABLE_ALLOWED",
         message:
-          "Não foi possível validar esta compra agora. " +
-          "Aguarde alguns segundos e tente novamente.",
+          "A validação não respondeu dentro do prazo. " +
+          "O checkout foi liberado.",
       };
 
       ultimaChaveValidada = snapshot.chave;
