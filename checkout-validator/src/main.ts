@@ -3,6 +3,10 @@ import type { NubeSDK } from "@tiendanube/nube-sdk-types";
 const API_URL =
   "https://bloqueio-compra-cpf-nuvemshop.onrender.com/api/validar-checkout";
 
+const TEMPO_LIMITE_API_MS = 10_000;
+const ATRASO_VALIDACAO_MS = 120;
+const INTERVALO_REAPLICACAO_MS = 1_000;
+
 type ItemCheckout = {
   product_id: string;
   variant_id: string;
@@ -14,6 +18,12 @@ type RespostaValidacao = {
   allowed: boolean;
   code?: string;
   message?: string;
+};
+
+type SnapshotCheckout = {
+  cpf: string;
+  itens: ItemCheckout[];
+  chave: string;
 };
 
 function limparCpf(valor: string | null | undefined): string {
@@ -51,8 +61,12 @@ function enviarResultado(
 
 export function App(nube: NubeSDK): void {
   let validacaoEmAndamento = false;
+  let chaveEmValidacao = "";
   let ultimaChaveValidada = "";
+  let ultimoResultado: RespostaValidacao | null = null;
   let contadorValidacao = 0;
+  let controladorAtual: AbortController | null = null;
+  let temporizadorValidacao: ReturnType<typeof setTimeout> | null = null;
 
   nube.send("config:set", () => ({
     config: {
@@ -60,10 +74,8 @@ export function App(nube: NubeSDK): void {
     },
   }));
 
-  async function validarCheckout(): Promise<void> {
-    const numeroValidacao = ++contadorValidacao;
+  function obterSnapshot(): SnapshotCheckout {
     const estado = nube.getState();
-
 
     const cpf = limparCpf(
       estado.customer?.billing_address?.id_number,
@@ -78,7 +90,7 @@ export function App(nube: NubeSDK): void {
       }),
     );
 
-    const chaveAtual = JSON.stringify({
+    const chave = JSON.stringify({
       cpf,
       itens: itens.map((item) => ({
         product_id: item.product_id,
@@ -87,20 +99,96 @@ export function App(nube: NubeSDK): void {
       })),
     });
 
+    return {
+      cpf,
+      itens,
+      chave,
+    };
+  }
+
+  function aplicarResultado(
+    resultado: RespostaValidacao,
+  ): void {
+    enviarResultado(
+      nube,
+      resultado.allowed === true,
+      resultado.message,
+    );
+  }
+
+  function bloquearDuranteValidacao(): void {
+    enviarResultado(
+      nube,
+      false,
+      "Validando CPF e produtos do carrinho...",
+    );
+  }
+
+  function reaplicarResultadoConhecido(): boolean {
+    const snapshot = obterSnapshot();
+
     if (
-      chaveAtual === ultimaChaveValidada &&
-      !validacaoEmAndamento
+      ultimoResultado &&
+      snapshot.chave === ultimaChaveValidada
     ) {
+      aplicarResultado(ultimoResultado);
+      return true;
+    }
+
+    return false;
+  }
+
+  async function validarCheckout(
+    forcarConsulta = false,
+    bloquearEnquantoConsulta = true,
+  ): Promise<void> {
+    const snapshot = obterSnapshot();
+
+    /*
+     * O checkout pode limpar o estado de cart:validate ao
+     * trocar pagamento, frete ou ao reconstruir a tela.
+     * Mesmo que CPF e itens não tenham mudado, reenviamos o
+     * último resultado para manter o botão bloqueado.
+     */
+    if (
+      !forcarConsulta &&
+      ultimoResultado &&
+      snapshot.chave === ultimaChaveValidada
+    ) {
+      aplicarResultado(ultimoResultado);
       return;
     }
 
-    ultimaChaveValidada = chaveAtual;
-    validacaoEmAndamento = true;
+    /* Evita requisições duplicadas para o mesmo estado. */
+    if (
+      validacaoEmAndamento &&
+      snapshot.chave === chaveEmValidacao
+    ) {
+      if (!reaplicarResultadoConhecido() && bloquearEnquantoConsulta) {
+        bloquearDuranteValidacao();
+      }
+      return;
+    }
 
+    if (bloquearEnquantoConsulta) {
+      bloquearDuranteValidacao();
+    }
+
+    /*
+     * Se CPF ou carrinho mudaram, a resposta antiga não pode
+     * sobrescrever a validação do estado novo.
+     */
+    controladorAtual?.abort();
+
+    const numeroValidacao = ++contadorValidacao;
     const controlador = new AbortController();
-    const temporizador = setTimeout(
+    controladorAtual = controlador;
+    validacaoEmAndamento = true;
+    chaveEmValidacao = snapshot.chave;
+
+    const temporizadorApi = setTimeout(
       () => controlador.abort(),
-      10_000,
+      TEMPO_LIMITE_API_MS,
     );
 
     try {
@@ -110,75 +198,165 @@ export function App(nube: NubeSDK): void {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          cpf,
-          items: itens,
+          cpf: snapshot.cpf,
+          items: snapshot.itens,
         }),
         signal: controlador.signal,
       });
 
       if (!resposta.ok) {
-        throw new Error(
-          `Erro HTTP ${resposta.status}`,
-        );
+        throw new Error(`Erro HTTP ${resposta.status}`);
       }
 
       const resultado =
         (await resposta.json()) as RespostaValidacao;
 
-      /*
-       * Ignora respostas antigas quando uma nova validação
-       * começou antes da requisição anterior terminar.
-       */
       if (numeroValidacao !== contadorValidacao) {
         return;
       }
 
-      enviarResultado(
-        nube,
-        resultado.allowed === true,
-        resultado.message,
-      );
+      ultimaChaveValidada = snapshot.chave;
+      ultimoResultado = resultado;
+      aplicarResultado(resultado);
 
       console.log(
         "[Bloqueio CPF] Validação:",
         resultado.code ?? "SEM_CODIGO",
       );
     } catch (erro) {
-      console.error(
-        "[Bloqueio CPF] Erro ao consultar API:",
-        erro,
-      );
+      if (numeroValidacao !== contadorValidacao) {
+        return;
+      }
+
+      if (
+        erro instanceof DOMException &&
+        erro.name === "AbortError"
+      ) {
+        console.warn(
+          "[Bloqueio CPF] Validação cancelada ou expirada.",
+        );
+      } else {
+        console.error(
+          "[Bloqueio CPF] Erro ao consultar API:",
+          erro,
+        );
+      }
 
       /*
-       * Estratégia segura:
-       * quando o carrinho possui produto controlado e a API
-       * não responde, bloqueamos temporariamente a progressão.
-       *
-       * Nesta primeira versão, como o script ainda não sabe
-       * localmente quais produtos são controlados, bloqueamos
-       * apenas até que a API volte a responder.
+       * Fail-closed: uma falha da API não pode liberar uma
+       * compra que deveria estar bloqueada.
        */
-      // Fail-open: uma indisponibilidade do backend não paralisa a loja.
-      enviarResultado(nube, true);
-      ultimaChaveValidada = "";
+      const resultadoIndisponivel: RespostaValidacao = {
+        allowed: false,
+        code: "VALIDATION_UNAVAILABLE",
+        message:
+          "Não foi possível validar esta compra agora. " +
+          "Aguarde alguns segundos e tente novamente.",
+      };
+
+      ultimaChaveValidada = snapshot.chave;
+      ultimoResultado = resultadoIndisponivel;
+      aplicarResultado(resultadoIndisponivel);
     } finally {
-      clearTimeout(temporizador);
+      clearTimeout(temporizadorApi);
 
       if (numeroValidacao === contadorValidacao) {
         validacaoEmAndamento = false;
+        chaveEmValidacao = "";
+        controladorAtual = null;
       }
     }
   }
 
+  function agendarValidacao(
+    forcarConsulta = false,
+    bloquearEnquantoConsulta = true,
+    atraso = ATRASO_VALIDACAO_MS,
+  ): void {
+    if (temporizadorValidacao !== null) {
+      clearTimeout(temporizadorValidacao);
+    }
+
+    temporizadorValidacao = setTimeout(() => {
+      temporizadorValidacao = null;
+      void validarCheckout(
+        forcarConsulta,
+        bloquearEnquantoConsulta,
+      );
+    }, atraso);
+  }
+
+  function tratarReconstrucaoDoCheckout(
+    forcarConsulta = true,
+  ): void {
+    /* Reaplica imediatamente o bloqueio já conhecido. */
+    const reaplicado = reaplicarResultadoConhecido();
+
+    if (!reaplicado) {
+      bloquearDuranteValidacao();
+    }
+
+    /*
+     * Consulta novamente porque o status do pedido pode ter
+     * mudado no backend enquanto o cliente permaneceu aberto
+     * no checkout.
+     */
+    agendarValidacao(forcarConsulta, true);
+
+    /*
+     * Algumas partes do checkout são reconstruídas depois do
+     * evento. Reaplicamos novamente após a renderização.
+     */
+    setTimeout(() => {
+      if (!reaplicarResultadoConhecido()) {
+        agendarValidacao(false, true, 0);
+      }
+    }, 450);
+  }
+
   nube.on("checkout:ready", () => {
-    void validarCheckout();
+    tratarReconstrucaoDoCheckout();
+  });
+
+  nube.on("page:loaded", () => {
+    tratarReconstrucaoDoCheckout();
   });
 
   nube.on("cart:update", () => {
-    void validarCheckout();
+    agendarValidacao(false, true);
   });
 
   nube.on("customer:update", () => {
-    void validarCheckout();
+    agendarValidacao(false, true, 250);
   });
+
+  nube.on("shipping:update", () => {
+    tratarReconstrucaoDoCheckout();
+  });
+
+  nube.on("payment:update", () => {
+    tratarReconstrucaoDoCheckout();
+  });
+
+  nube.on("location:updated", () => {
+    tratarReconstrucaoDoCheckout(false);
+  });
+
+  /*
+   * Proteção adicional: se o checkout limpar a validação sem
+   * emitir um evento documentado, um resultado de bloqueio é
+   * reaplicado periodicamente. Isso não chama a API.
+   */
+  setInterval(() => {
+    if (ultimoResultado?.allowed === false) {
+      reaplicarResultadoConhecido();
+    }
+  }, INTERVALO_REAPLICACAO_MS);
+
+  /*
+   * Fallback para carregamentos em que checkout:ready já foi
+   * emitido antes de o listener ser registrado.
+   */
+  bloquearDuranteValidacao();
+  agendarValidacao(true, true, 0);
 }
