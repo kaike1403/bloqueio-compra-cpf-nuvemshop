@@ -161,12 +161,10 @@ def receber_webhook_pedido():
         logger.warning(
             "Assinatura HMAC inválida. "
             "Tamanho=%s; motivo=%s; "
-            "app_secret_configurado=%s; "
-            "webhook_secret_configurado=%s",
+            "app_secret_configurado=%s",
             len(assinatura_recebida),
             metodo_assinatura,
             bool(NUVEMSHOP_APP_SECRET),
-            bool(WEBHOOK_SECRET),
         )
 
         return jsonify(
