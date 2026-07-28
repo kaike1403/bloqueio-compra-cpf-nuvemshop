@@ -6,7 +6,11 @@ import logging
 
 from flask import Blueprint, jsonify, request
 
-from src.config import NUVEMSHOP_APP_SECRET, STORE_ID
+from src.config import (
+    NUVEMSHOP_APP_SECRET,
+    STORE_ID,
+    WEBHOOK_SECRET,
+)
 from src.processador import processar_pedido
 
 
@@ -22,48 +26,73 @@ def extrair_id_do_evento(dados: dict[str, Any]) -> str:
 
     return str(pedido_id).strip()
 
-
 def assinatura_valida(
     corpo_bruto: bytes,
     assinatura_recebida: str,
-) -> bool:
+) -> tuple[bool, str]:
     """
-    Valida a assinatura HMAC-SHA256 enviada pela Nuvemshop.
+    Valida HMAC-SHA256 usando os segredos configurados.
 
-    A assinatura principal é comparada em Base64.
-    Também é mantida uma comparação hexadecimal como compatibilidade.
+    Aceita assinatura em hexadecimal ou Base64.
+    Nunca registra o valor dos segredos nos logs.
     """
 
-    segredo = str(NUVEMSHOP_APP_SECRET or "").strip()
-    assinatura = str(assinatura_recebida or "").strip()
+    assinatura = str(
+        assinatura_recebida or ""
+    ).strip()
 
-    if not segredo or not assinatura:
-        return False
+    if not assinatura:
+        return False, "assinatura_ausente"
 
-    digest_bruto = hmac.new(
-        segredo.encode("utf-8"),
-        corpo_bruto,
-        hashlib.sha256,
-    ).digest()
+    segredos = [
+        (
+            "NUVEMSHOP_APP_SECRET",
+            str(NUVEMSHOP_APP_SECRET or "").strip(),
+        ),
+        (
+            "WEBHOOK_SECRET",
+            str(WEBHOOK_SECRET or "").strip(),
+        ),
+    ]
 
-    assinatura_base64 = base64.b64encode(
-        digest_bruto
-    ).decode("utf-8")
+    segredos_testados: set[str] = set()
 
-    # Comparação principal: Base64
-    if hmac.compare_digest(
-        assinatura_base64,
-        assinatura,
-    ):
-        return True
+    for nome_variavel, segredo in segredos:
+        if not segredo:
+            continue
 
-    # Compatibilidade caso o provedor envie hexadecimal
-    assinatura_hexadecimal = digest_bruto.hex()
+        # Evita testar duas vezes quando as variáveis possuem
+        # exatamente o mesmo valor.
+        if segredo in segredos_testados:
+            continue
 
-    return hmac.compare_digest(
-        assinatura_hexadecimal.lower(),
-        assinatura.lower(),
-    )
+        segredos_testados.add(segredo)
+
+        digest_bruto = hmac.new(
+            segredo.encode("utf-8"),
+            corpo_bruto,
+            hashlib.sha256,
+        ).digest()
+
+        assinatura_base64 = base64.b64encode(
+            digest_bruto
+        ).decode("utf-8")
+
+        assinatura_hexadecimal = digest_bruto.hex()
+
+        if hmac.compare_digest(
+            assinatura,
+            assinatura_base64,
+        ):
+            return True, nome_variavel + "_base64"
+
+        if hmac.compare_digest(
+            assinatura.lower(),
+            assinatura_hexadecimal.lower(),
+        ):
+            return True, nome_variavel + "_hex"
+
+    return False, "nenhum_segredo_correspondeu"
 
 
 @webhook_bp.route(
@@ -97,9 +126,19 @@ def receber_webhook_pedido():
     # É essencial validar o corpo bruto exatamente como recebido.
     corpo_bruto = request.get_data(cache=True)
 
-    assinatura_recebida = request.headers.get(
-        "X-Linkedstore-Hmac-Sha256",
-        "",
+    assinatura_recebida = (
+        request.headers.get(
+            "X-Linkedstore-Hmac-Sha256",
+            "",
+        )
+        or request.headers.get(
+            "X-Tiendanube-Hmac-Sha256",
+            "",
+        )
+        or request.headers.get(
+            "X-Nuvemshop-Hmac-Sha256",
+            "",
+        )
     ).strip()
 
     logger.info(
@@ -109,14 +148,21 @@ def receber_webhook_pedido():
         len(corpo_bruto),
     )
 
-    if not assinatura_valida(
+    assinatura_ok, metodo_assinatura = assinatura_valida(
         corpo_bruto,
         assinatura_recebida,
-    ):
+    )
+
+    if not assinatura_ok:
         logger.warning(
-            "Assinatura HMAC do webhook inválida. "
-            "Tamanho da assinatura recebida: %s",
+            "Assinatura HMAC inválida. "
+            "Tamanho=%s; motivo=%s; "
+            "app_secret_configurado=%s; "
+            "webhook_secret_configurado=%s",
             len(assinatura_recebida),
+            metodo_assinatura,
+            bool(NUVEMSHOP_APP_SECRET),
+            bool(WEBHOOK_SECRET),
         )
 
         return jsonify(
@@ -125,6 +171,11 @@ def receber_webhook_pedido():
                 "erro": "Webhook não autorizado",
             }
         ), 401
+
+    logger.info(
+        "Assinatura HMAC válida usando %s",
+        metodo_assinatura,
+    )
 
     dados = request.get_json(silent=True)
 
