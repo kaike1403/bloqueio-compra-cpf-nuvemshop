@@ -148,6 +148,23 @@ def receber_webhook_pedido():
         len(corpo_bruto),
     )
 
+    import hashlib
+
+    logger.warning(
+        "APP_SECRET SHA1: %s",
+        hashlib.sha1(
+            str(NUVEMSHOP_APP_SECRET).encode()
+        ).hexdigest(),
+    )
+
+    logger.warning(
+        "WEBHOOK_SECRET SHA1: %s",
+        hashlib.sha1(
+            str(WEBHOOK_SECRET).encode()
+        ).hexdigest(),
+    )
+
+
     assinatura_ok, metodo_assinatura = assinatura_valida(
         corpo_bruto,
         assinatura_recebida,
