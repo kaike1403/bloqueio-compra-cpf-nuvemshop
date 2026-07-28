@@ -71,54 +71,87 @@ def extrair_cpf_do_pedido(
     pedido: dict[str, Any],
 ) -> str:
     """
-    Procura o CPF nos campos retornados pela Nuvemshop.
-
-    Pela estrutura encontrada na sua loja, os principais campos são:
-    - pedido.customer.identification
-    - pedido.contact_identification
+    Procura o CPF nos campos conhecidos do pedido da Nuvemshop,
+    tratando com segurança campos que podem vir como texto,
+    lista, None ou dicionário.
     """
 
-    customer = pedido.get("customer") or {}
-    billing = pedido.get("billing_address") or {}
-    shipping = pedido.get("shipping_address") or {}
-    customer_billing = customer.get("billing_address") or {}
-    customer_shipping = customer.get("shipping_address") or {}
+    if not isinstance(pedido, dict):
+        return ""
 
-    # Em compras sem login, o CPF costuma vir nos campos de
-    # contato/endereço do pedido, e não necessariamente no cadastro
-    # permanente de customer. Por isso verificamos todas as formas
-    # conhecidas sem depender de o cliente estar autenticado.
+    customer = pedido.get("customer")
+
+    if not isinstance(customer, dict):
+        customer = {}
+
+    billing = pedido.get("billing_address")
+
+    if not isinstance(billing, dict):
+        billing = {}
+
+    shipping = pedido.get("shipping_address")
+
+    if not isinstance(shipping, dict):
+        shipping = {}
+
+    customer_billing = customer.get("billing_address")
+
+    if not isinstance(customer_billing, dict):
+        customer_billing = {}
+
+    customer_shipping = customer.get("shipping_address")
+
+    if not isinstance(customer_shipping, dict):
+        customer_shipping = {}
+
     candidatos = [
         pedido.get("contact_identification"),
         pedido.get("contact_document"),
         pedido.get("contact_cpf_cnpj"),
+        pedido.get("identification"),
+        pedido.get("identification_number"),
+        pedido.get("cpf_cnpj"),
+        pedido.get("document"),
+
         customer.get("identification"),
         customer.get("identification_number"),
         customer.get("cpf_cnpj"),
         customer.get("document"),
         customer.get("cpf"),
+
         billing.get("id_number"),
         billing.get("identification"),
+        billing.get("identification_number"),
         billing.get("cpf_cnpj"),
+        billing.get("document"),
+
         shipping.get("id_number"),
         shipping.get("identification"),
+        shipping.get("identification_number"),
         shipping.get("cpf_cnpj"),
+        shipping.get("document"),
+
         customer_billing.get("id_number"),
         customer_billing.get("identification"),
+        customer_billing.get("identification_number"),
         customer_billing.get("cpf_cnpj"),
+        customer_billing.get("document"),
+
         customer_shipping.get("id_number"),
         customer_shipping.get("identification"),
+        customer_shipping.get("identification_number"),
         customer_shipping.get("cpf_cnpj"),
+        customer_shipping.get("document"),
     ]
 
     for candidato in candidatos:
-        cpf = normalizar_cpf(candidato)
+        if isinstance(candidato, (str, int, float)):
+            cpf = normalizar_cpf(str(candidato))
 
-        if cpf_tem_formato_valido(cpf):
-            return cpf
+            if cpf_tem_formato_valido(cpf):
+                return cpf
 
     return ""
-
 
 def extrair_produtos_do_pedido(
     pedido: dict[str, Any],
