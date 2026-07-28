@@ -9,7 +9,6 @@ from flask import Blueprint, jsonify, request
 from src.config import (
     NUVEMSHOP_APP_SECRET,
     STORE_ID,
-    WEBHOOK_SECRET,
 )
 from src.processador import processar_pedido
 
@@ -30,30 +29,33 @@ def assinatura_valida(
     corpo_bruto: bytes,
     assinatura_recebida: str,
 ) -> tuple[bool, str]:
-    """
-    Valida HMAC-SHA256 usando os segredos configurados.
-
-    Aceita assinatura em hexadecimal ou Base64.
-    Nunca registra o valor dos segredos nos logs.
-    """
-
     assinatura = str(
         assinatura_recebida or ""
+    ).strip().lower()
+
+    segredo = str(
+        NUVEMSHOP_APP_SECRET or ""
     ).strip()
 
     if not assinatura:
         return False, "assinatura_ausente"
 
-    segredos = [
-        (
-            "NUVEMSHOP_APP_SECRET",
-            str(NUVEMSHOP_APP_SECRET or "").strip(),
-        ),
-        (
-            "WEBHOOK_SECRET",
-            str(WEBHOOK_SECRET or "").strip(),
-        ),
-    ]
+    if not segredo:
+        return False, "app_secret_ausente"
+
+    assinatura_calculada = hmac.new(
+        segredo.encode("utf-8"),
+        corpo_bruto,
+        hashlib.sha256,
+    ).hexdigest()
+
+    if hmac.compare_digest(
+        assinatura,
+        assinatura_calculada,
+    ):
+        return True, "NUVEMSHOP_APP_SECRET_hex"
+
+    return False, "assinatura_invalida"
 
     segredos_testados: set[str] = set()
 
@@ -149,21 +151,6 @@ def receber_webhook_pedido():
     )
 
     import hashlib
-
-    logger.warning(
-        "APP_SECRET SHA1: %s",
-        hashlib.sha1(
-            str(NUVEMSHOP_APP_SECRET).encode()
-        ).hexdigest(),
-    )
-
-    logger.warning(
-        "WEBHOOK_SECRET SHA1: %s",
-        hashlib.sha1(
-            str(WEBHOOK_SECRET).encode()
-        ).hexdigest(),
-    )
-
 
     assinatura_ok, metodo_assinatura = assinatura_valida(
         corpo_bruto,
