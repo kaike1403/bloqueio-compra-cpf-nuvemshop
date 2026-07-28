@@ -654,9 +654,10 @@ def buscar_compras_do_dia(
     excluir_pedido_id: int | str | None = None,
 ) -> list[dict[str, Any]]:
     """
-    Busca pedidos do mesmo CPF e produto no mesmo dia.
+    Busca somente pedidos PAGOS do mesmo CPF e produto no mesmo dia.
 
-    Pedidos cancelados são ignorados.
+    Pedidos pendentes e cancelados são ignorados. Assim, uma
+    tentativa PIX ainda não paga nunca bloqueia nem cancela outra.
     """
 
     cpf_limpo = normalizar_cpf(cpf)
@@ -673,6 +674,7 @@ def buscar_compras_do_dia(
                 DATE(NULLIF(pedido_criado_em, '')),
                 DATE(criado_em)
               ) = ?
+          AND LOWER(COALESCE(status_pagamento, '')) = 'paid'
           AND LOWER(COALESCE(status_pedido, '')) NOT IN (
                 'cancelled',
                 'canceled',

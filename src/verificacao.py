@@ -79,13 +79,36 @@ def extrair_cpf_do_pedido(
     """
 
     customer = pedido.get("customer") or {}
+    billing = pedido.get("billing_address") or {}
+    shipping = pedido.get("shipping_address") or {}
+    customer_billing = customer.get("billing_address") or {}
+    customer_shipping = customer.get("shipping_address") or {}
 
+    # Em compras sem login, o CPF costuma vir nos campos de
+    # contato/endereço do pedido, e não necessariamente no cadastro
+    # permanente de customer. Por isso verificamos todas as formas
+    # conhecidas sem depender de o cliente estar autenticado.
     candidatos = [
-        customer.get("identification"),
         pedido.get("contact_identification"),
+        pedido.get("contact_document"),
+        pedido.get("contact_cpf_cnpj"),
+        customer.get("identification"),
         customer.get("identification_number"),
+        customer.get("cpf_cnpj"),
         customer.get("document"),
         customer.get("cpf"),
+        billing.get("id_number"),
+        billing.get("identification"),
+        billing.get("cpf_cnpj"),
+        shipping.get("id_number"),
+        shipping.get("identification"),
+        shipping.get("cpf_cnpj"),
+        customer_billing.get("id_number"),
+        customer_billing.get("identification"),
+        customer_billing.get("cpf_cnpj"),
+        customer_shipping.get("id_number"),
+        customer_shipping.get("identification"),
+        customer_shipping.get("cpf_cnpj"),
     ]
 
     for candidato in candidatos:

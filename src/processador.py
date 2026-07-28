@@ -32,20 +32,19 @@ MODO_SIMULACAO = True
 
 def pagamento_valido(pedido: dict[str, Any]) -> bool:
     """
-    Pedidos pagos e pendentes participam do controle.
+    Somente pedidos efetivamente pagos entram no controle.
 
-    Um pedido pendente já reserva o direito de compra
-    daquele CPF durante o dia.
+    Pedidos PIX pendentes não reservam o direito de compra e
+    nunca devem provocar o cancelamento de outro pedido. Quando
+    o pagamento for confirmado, o evento order/updated fará o
+    processamento novamente com payment_status=paid.
     """
 
     status_pagamento = str(
         pedido.get("payment_status", "")
     ).lower().strip()
 
-    return status_pagamento in {
-        "paid",
-        "pending",
-    }
+    return status_pagamento == "paid"
 
 def pedido_cancelado(pedido: dict[str, Any]) -> bool:
     """
@@ -262,7 +261,8 @@ def processar_pedido(
     if not pagamento_valido(pedido):
         mensagem = (
             "Pedido ainda não está pago. "
-            "Nenhum produto será registrado."
+            "Pedidos pendentes não bloqueiam novas compras "
+            "e não serão registrados nem cancelados."
         )
 
         print(mensagem)
@@ -479,23 +479,67 @@ def processar_pedido(
                 nome_produto=nome,
             )
 
-            print(
-                "REPROCESSAMENTO: este produto já foi registrado "
-                "pelo mesmo pedido e teve os status atualizados."
-            )
-
-            resultado["reprocessamento"] = True
-            registrar_log(
-                resultado="reprocessamento",
-                motivo="Produto já registrado pelo mesmo pedido",
-                pedido_id=pedido.get("id"),
-                numero_pedido=numero_pedido,
+            # Bancos de versões antigas podem conter pedidos PIX
+            # pendentes. Ao receber a confirmação de pagamento,
+            # verificamos se já existe OUTRO pedido pago antes de
+            # considerar o evento apenas um reprocessamento.
+            compras_pagas_anteriores = buscar_compras_do_dia(
                 cpf=cpf,
                 produto_id=produto_id,
-                variante_id=variante_id,
-                sku=sku,
-                nome_produto=nome,
+                data_pedido=data_pedido,
+                excluir_pedido_id=pedido.get("id"),
             )
+
+            if compras_pagas_anteriores:
+                print(
+                    "DUPLICADO: outro pedido pago deste CPF "
+                    "já possui o produto."
+                )
+                resultado["duplicado"] = True
+                resultado["produtos_duplicados"].append(
+                    {
+                        "produto_id": produto_id,
+                        "variante_id": variante_id,
+                        "sku": sku,
+                        "nome": nome,
+                        "quantidade": quantidade,
+                        "motivo": (
+                            "CPF já possui outro pedido pago "
+                            "deste produto no mesmo dia"
+                        ),
+                    }
+                )
+                registrar_log(
+                    resultado="duplicado",
+                    motivo=(
+                        "Outro pedido pago do CPF já possui "
+                        "este produto"
+                    ),
+                    pedido_id=pedido.get("id"),
+                    numero_pedido=numero_pedido,
+                    cpf=cpf,
+                    produto_id=produto_id,
+                    variante_id=variante_id,
+                    sku=sku,
+                    nome_produto=nome,
+                )
+            else:
+                print(
+                    "REPROCESSAMENTO: este produto já foi registrado "
+                    "pelo mesmo pedido e teve os status atualizados."
+                )
+                resultado["reprocessamento"] = True
+                registrar_log(
+                    resultado="reprocessamento",
+                    motivo="Produto já registrado pelo mesmo pedido",
+                    pedido_id=pedido.get("id"),
+                    numero_pedido=numero_pedido,
+                    cpf=cpf,
+                    produto_id=produto_id,
+                    variante_id=variante_id,
+                    sku=sku,
+                    nome_produto=nome,
+                )
             continue
 
         compras_anteriores = buscar_compras_do_dia(

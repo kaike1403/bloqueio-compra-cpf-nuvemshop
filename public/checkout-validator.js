@@ -5,6 +5,34 @@ const INTERVALO_REAPLICACAO_MS = 1000;
 function limparCpf(valor) {
     return String(valor ?? "").replace(/\D/g, "");
 }
+function obterCpfDoEstado(estado) {
+    const raiz = (estado ?? {});
+    const customer = (raiz.customer ?? {});
+    const billing = (customer.billing_address ?? {});
+    const shipping = (customer.shipping_address ?? {});
+    const candidatos = [
+        customer.cpf_cnpj,
+        customer.identification,
+        customer.identification_number,
+        customer.id_number,
+        customer.document,
+        billing.id_number,
+        billing.identification,
+        billing.cpf_cnpj,
+        shipping.id_number,
+        shipping.identification,
+        shipping.cpf_cnpj,
+    ];
+    for (const candidato of candidatos) {
+        const cpf = limparCpf(typeof candidato === "string" || typeof candidato === "number"
+            ? String(candidato)
+            : "");
+        if (cpf.length === 11) {
+            return cpf;
+        }
+    }
+    return "";
+}
 function enviarResultado(nube, permitido, mensagem) {
     if (permitido) {
         nube.send("cart:validate", () => ({
@@ -41,8 +69,15 @@ export function App(nube) {
     }));
     function obterSnapshot() {
         const estado = nube.getState();
+<<<<<<< HEAD
         const cpf = limparCpf(estado.customer?.cpf_cnpj ??
             estado.customer?.billing_address?.id_number);
+=======
+        // Também funciona no checkout como visitante. Nesse fluxo,
+        // o documento pode aparecer somente no endereço de cobrança
+        // ou em identification, sem existir um cliente autenticado.
+        const cpf = obterCpfDoEstado(estado);
+>>>>>>> b68f580 (Corrige validacao de CPF em checkout visitante e pedidos PIX)
         const itens = estado.cart.items.map((item) => ({
             product_id: String(item.product_id),
             variant_id: String(item.variant_id),

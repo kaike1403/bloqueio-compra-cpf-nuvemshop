@@ -30,6 +30,42 @@ function limparCpf(valor: string | null | undefined): string {
   return String(valor ?? "").replace(/\D/g, "");
 }
 
+
+function obterCpfDoEstado(estado: unknown): string {
+  const raiz = (estado ?? {}) as Record<string, unknown>;
+  const customer = (raiz.customer ?? {}) as Record<string, unknown>;
+  const billing = (customer.billing_address ?? {}) as Record<string, unknown>;
+  const shipping = (customer.shipping_address ?? {}) as Record<string, unknown>;
+
+  const candidatos: unknown[] = [
+    customer.cpf_cnpj,
+    customer.identification,
+    customer.identification_number,
+    customer.id_number,
+    customer.document,
+    billing.id_number,
+    billing.identification,
+    billing.cpf_cnpj,
+    shipping.id_number,
+    shipping.identification,
+    shipping.cpf_cnpj,
+  ];
+
+  for (const candidato of candidatos) {
+    const cpf = limparCpf(
+      typeof candidato === "string" || typeof candidato === "number"
+        ? String(candidato)
+        : "",
+    );
+
+    if (cpf.length === 11) {
+      return cpf;
+    }
+  }
+
+  return "";
+}
+
 function enviarResultado(
   nube: NubeSDK,
   permitido: boolean,
@@ -77,13 +113,20 @@ export function App(nube: NubeSDK): void {
   function obterSnapshot(): SnapshotCheckout {
     const estado = nube.getState();
 
+<<<<<<< HEAD
     const cpf = limparCpf(
       estado.customer?.cpf_cnpj ??
         estado.customer?.billing_address?.id_number,
     );
+=======
+    // Também funciona no checkout como visitante. Nesse fluxo,
+    // o documento pode aparecer somente no endereço de cobrança
+    // ou em identification, sem existir um cliente autenticado.
+    const cpf = obterCpfDoEstado(estado);
+>>>>>>> b68f580 (Corrige validacao de CPF em checkout visitante e pedidos PIX)
 
     const itens: ItemCheckout[] = estado.cart.items.map(
-      (item) => ({
+      (item: any) => ({
         product_id: String(item.product_id),
         variant_id: String(item.variant_id),
         quantity: Number(item.quantity ?? 0),
