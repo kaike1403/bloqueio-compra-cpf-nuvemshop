@@ -144,6 +144,17 @@ def extrair_cpf_do_pedido(
         customer_shipping.get("document"),
     ]
 
+    # Quando a Nuvemshop disponibiliza o documento em mais de um campo,
+    # prefere um CPF matematicamente válido.
+    for candidato in candidatos:
+        if isinstance(candidato, (str, int, float)):
+            cpf = normalizar_cpf(str(candidato))
+
+            if validar_cpf(cpf):
+                return cpf
+
+    # Se houver 11 dígitos, mas os verificadores forem inválidos, retorna
+    # o valor para que o chamador consiga rejeitar explicitamente o pedido.
     for candidato in candidatos:
         if isinstance(candidato, (str, int, float)):
             cpf = normalizar_cpf(str(candidato))
@@ -236,7 +247,7 @@ def compra_duplicada(
 
 def mascarar_cpf(cpf: str | None) -> str:
     """
-    Retorna o CPF parcialmente oculto para uso em logs.
+    Retorna CPF minimizado para logs: ***.123.456-**.
     """
 
     cpf_limpo = normalizar_cpf(cpf)
@@ -245,9 +256,23 @@ def mascarar_cpf(cpf: str | None) -> str:
         return "***.***.***-**"
 
     return (
-        f"{cpf_limpo[:3]}."
-        f"***.***-"
-        f"{cpf_limpo[-2:]}"
+        "***."
+        f"{cpf_limpo[3:6]}."
+        f"{cpf_limpo[6:9]}-**"
+    )
+
+
+def sanitizar_texto_cpf(valor: object) -> str:
+    """Mascara CPFs formatados ou com 11 dígitos presentes em texto/log."""
+    texto = str(valor or "")
+
+    padrao = re.compile(
+        r"(?<!\d)(\d{3}[.\s-]?\d{3}[.\s-]?\d{3}[-.\s]?\d{2})(?!\d)"
+    )
+
+    return padrao.sub(
+        lambda correspondencia: mascarar_cpf(correspondencia.group(1)),
+        texto,
     )
 
 

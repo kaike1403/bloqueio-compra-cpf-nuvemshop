@@ -1,33 +1,83 @@
 # Implantação segura
 
-## Segredos e webhooks
+## 1. Segredos
 
-Configure no Render `FLASK_SECRET_KEY`, `ADMIN_USER`, `ADMIN_PASSWORD`, `CHECKOUT_TOKEN_SECRET` e `NUVEMSHOP_APP_SECRET` com valores fortes. `NUVEMSHOP_APP_SECRET` deve ser exatamente o segredo da aplicação cadastrado na Nuvemshop e é a única variável usada para validar HMAC dos webhooks. Não mantenha um segundo segredo paralelo para webhooks.
+Configure no Render, no mínimo, `FLASK_SECRET_KEY`, `ADMIN_USER`, `ADMIN_PASSWORD`, `CHECKOUT_TOKEN_SECRET`, `NUVEMSHOP_APP_SECRET`, `NUVEMSHOP_STORE_ID`, `NUVEMSHOP_ACCESS_TOKEN` e `NUVEMSHOP_USER_AGENT`.
 
-Os webhooks de pedidos e LGPD exigem `X-Linkedstore-Hmac-Sha256` (com aliases compatíveis aceitos pelo código) calculado sobre o corpo bruto com HMAC-SHA256. Se `NUVEMSHOP_APP_SECRET` não estiver configurado, esses endpoints registram erro e retornam HTTP 503; não aceitam o evento silenciosamente.
+`NUVEMSHOP_APP_SECRET` é o único segredo usado para validar HMAC-SHA256 dos webhooks. Não mantenha um segundo segredo paralelo para webhooks e nunca coloque `NUVEMSHOP_APP_SECRET`, `CHECKOUT_TOKEN_SECRET`, `ADMIN_PASSWORD` ou `FLASK_SECRET_KEY` no JavaScript público ou no Git.
 
-## Checkout público
-
-`/api/validar-checkout` não aceita mais chamadas anônimas. O NubeSDK envia `store.id` e `session.id` para `/api/checkout-token`; o backend só emite um token HMAC temporário quando o `store_id` corresponde a `NUVEMSHOP_STORE_ID` e a origem pertence a `CORS_ORIGINS`. A validação exige `X-Store-ID`, `X-Checkout-Session` e `X-Checkout-Token`.
-
-`CHECKOUT_TOKEN_SECRET` permanece somente no backend. O token emitido é de curta duração (padrão: 300 segundos), vinculado à loja, origem e sessão. Essa camada reduz fortemente o uso casual do endpoint como oráculo, mas **não é atestação criptográfica da origem do navegador**: um atacante fora do browser pode falsificar `Origin`. Por isso, o rate limit e a rotação de segredo continuam obrigatórios.
-
-Para exigência de atestação criptográfica de origem, use um mecanismo assinado pela própria plataforma. A Nuvemshop documenta App Proxies com `X-Linkedstore-HMAC-Sha256`, assinado com o segredo da aplicação, mas esse recurso é descrito para storefront e depende de configuração pela Nuvemshop. Antes de trocar o fluxo do checkout para App Proxy, confirme com o suporte/parcerias da Nuvemshop que o proxy está disponível e suportado no contexto do checkout da sua aplicação. Não coloque `NUVEMSHOP_APP_SECRET` nem outro segredo permanente no JavaScript público.
-
-Limites atuais: emissão de token `6/min` e `30/h` por IP+loja; validação de checkout `15/min` e `120/h` por IP+loja; autenticação Basic do `/admin` `5/min` e `20/h` por IP, contabilizando respostas 401. Em produção distribuída, configure `RATELIMIT_STORAGE_URI` com Redis para compartilhar os contadores entre workers.
-
-## CPF e LGPD
-
-O backend valida matematicamente o CPF antes de consultar/registrar compras. Logs técnicos recebem apenas CPF mascarado no padrão `***.123.456-**`; registros legados de `logs_processamento` são mascarados na migração. Respostas de erro da API também passam por sanitização antes de serem impressas ou persistidas como texto de auditoria.
-
-`LGPD_RETENCAO_DIAS` define a janela de retenção do índice operacional. `banco.py` executa uma rotina de minimização no máximo uma vez a cada 24 horas: registros antigos de `compras` são removidos, e CPFs antigos de `cancelamentos` e `logs_processamento` são anonimizados. Ajuste o prazo à base legal e às obrigações de retenção da empresa; o valor padrão do projeto é 180 dias.
-
-## Geração de segredos
-
-No PowerShell:
+Gere `FLASK_SECRET_KEY` e `CHECKOUT_TOKEN_SECRET` com valores independentes e longos. Exemplo no PowerShell:
 
 ```powershell
 python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
-Gere valores independentes para `FLASK_SECRET_KEY` e `CHECKOUT_TOKEN_SECRET`. `NUVEMSHOP_APP_SECRET` não deve ser inventado: use o segredo fornecido no cadastro da aplicação Nuvemshop.
+## 2. Webhooks de pedidos e LGPD
+
+Todos os endpoints de webhook validam o corpo bruto com HMAC-SHA256 usando `NUVEMSHOP_APP_SECRET`, conferem `store_id`, limitam o tamanho do payload e rejeitam chamadas sem assinatura válida antes de executar qualquer consulta ou exclusão.
+
+Rotas protegidas:
+
+- `POST /webhooks/pedidos`
+- `POST /webhooks/lgpd/store-redact`
+- `POST /webhooks/lgpd/customer-redact`
+- `POST /webhooks/lgpd/customer-data-request`
+
+As rotas LGPD destrutivas nunca executam exclusões antes de HMAC e loja serem validados. `customer-data-request` responde de forma uniforme e não informa publicamente se um CPF foi localizado.
+
+Se `NUVEMSHOP_APP_SECRET` ou `NUVEMSHOP_STORE_ID` estiverem ausentes, os webhooks retornam 503 em vez de aceitar eventos silenciosamente.
+
+## 3. Checkout e bots
+
+O NubeSDK inicia `cart:validate` em estado `fail` imediatamente. O debounce existe apenas para reduzir chamadas HTTP; ele não cria uma janela em que o checkout fique liberado antes da validação.
+
+Fluxo:
+
+1. checkout inicia bloqueado;
+2. `/api/checkout-token` emite token HMAC curto vinculado a `store_id`, `session_id` e `Origin`;
+3. `/api/validar-checkout` exige `X-Store-ID`, `X-Checkout-Session` e `X-Checkout-Token`;
+4. CPF e regras de produto são validados no backend;
+5. somente `allowed: true` libera uma validação normal.
+
+Por decisão operacional deste projeto, indisponibilidade técnica real da infraestrutura é **fail-open**: timeout, falha de rede, rota temporariamente indisponível ou erro 5xx liberam a compra para não interromper vendas. Falhas de segurança/cliente como 400, 401, 403, 413, 422 e 429 permanecem bloqueadas para que um atacante não consiga provocar deliberadamente um erro e ganhar liberação.
+
+Essa proteção reduz bastante automação abusiva, mas um segredo permanente não pode ser mantido secreto em JavaScript. `Origin` também não é uma atestação criptográfica para clientes fora do navegador. Portanto, token curto e rate limit são camadas de redução de abuso, não prova absoluta de origem.
+
+## 4. Rate limit
+
+O projeto usa uma única instância de Flask-Limiter:
+
+- `/api/checkout-token`: 6/min e 30/h por IP + loja;
+- `/api/validar-checkout`: 15/min e 120/h por IP + loja;
+- `/admin`: tentativas Basic Auth que retornam 401 contam para 5/min e 20/h por IP;
+- webhooks possuem limite alto adicional para absorver abuso de rede sem atrapalhar tráfego normal.
+
+Em produção com múltiplos workers/instâncias, configure `RATELIMIT_STORAGE_URI` com Redis. `memory://` deve ser usado apenas em desenvolvimento ou instância única.
+
+## 5. Admin e exposição de rotas
+
+`/` retorna 404 e não publica mapa de endpoints. `/health` retorna apenas `{"status":"ok"}` e não informa versão, painel ou rota de checkout.
+
+O painel continua protegido por Basic Auth, CSRF, cookies `Secure`/`HttpOnly` e rate limit. `ADMIN_PATH` permite trocar `/admin` por um caminho menos óbvio, por exemplo `/gestao-<valor-aleatorio>`. Isso reduz ruído de scanners, mas **não substitui** autenticação. Para proteção mais forte, coloque o painel atrás de Cloudflare Access, VPN ou allowlist de IP.
+
+Webhooks e APIs usadas pelo checkout não podem ser realmente "ocultadas": os chamadores legítimos precisam alcançá-las e o JavaScript público revela as URLs. A proteção correta é autenticação, HMAC, token, CORS, rate limit e respostas mínimas.
+
+## 6. CPF e LGPD
+
+A validação matemática de CPF é centralizada em `src/verificacao.py` e reutilizada em `processador.py`, `checkout_service.py` e na persistência crítica.
+
+Logs técnicos nunca armazenam CPF completo. O formato de máscara é `***.123.456-**`. A migração do banco converte CPFs legados em texto puro na tabela `logs_processamento` para máscara, e mensagens/respostas persistidas passam por sanitização para remover CPFs encontrados em texto.
+
+`LGPD_RETENCAO_DIAS` controla a minimização periódica. No máximo uma vez por 24 horas, `banco.py`:
+
+- remove registros antigos de `compras`;
+- anonimiza CPF de `cancelamentos` antigos;
+- anonimiza CPF de `logs_processamento` antigos.
+
+Também existe `executar_retencao_lgpd(forcar=True)` para execução administrativa/manutenção. Ajuste o prazo à base legal e às obrigações reais da empresa; 180 dias é apenas o padrão técnico do projeto.
+
+## 7. Build e artefatos
+
+O fonte oficial do checkout é `checkout-validator/src/main.ts`. `npm run build` compila para `checkout-validator/dist/main.js` e publica automaticamente o mesmo conteúdo em `public/checkout-validator.js`.
+
+Não mantenha uma segunda árvore `src/checkout-validator/`. Não envie `.env`, bancos SQLite, `.git`, `node_modules`, `__pycache__` ou artefatos locais contendo dados pessoais.

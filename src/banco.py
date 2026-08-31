@@ -1,8 +1,11 @@
 import os
 import sqlite3
+import time
 from pathlib import Path
 from typing import Any
 
+from src.config import LGPD_RETENCAO_DIAS
+from src.verificacao import mascarar_cpf, sanitizar_texto_cpf, validar_cpf
 
 
 PASTA_RAIZ = Path(__file__).resolve().parent.parent
@@ -54,6 +57,9 @@ def registrar_log(
     criar_banco()
 
     cpf_limpo = normalizar_cpf(cpf)
+    cpf_para_log = mascarar_cpf(cpf_limpo) if cpf_limpo else None
+    motivo_seguro = sanitizar_texto_cpf(motivo)
+    nome_produto_seguro = sanitizar_texto_cpf(nome_produto) if nome_produto else None
 
     with conectar() as conexao:
         conexao.execute(
@@ -74,13 +80,13 @@ def registrar_log(
             (
                 str(pedido_id) if pedido_id is not None else None,
                 str(numero_pedido) if numero_pedido is not None else None,
-                cpf_limpo or None,
+                cpf_para_log,
                 str(produto_id) if produto_id is not None else None,
                 str(variante_id) if variante_id is not None else None,
-                sku,
-                nome_produto,
-                resultado,
-                motivo,
+                sanitizar_texto_cpf(sku) if sku else None,
+                nome_produto_seguro,
+                sanitizar_texto_cpf(resultado),
+                motivo_seguro,
             ),
         )
         
@@ -119,6 +125,9 @@ def registrar_cancelamento_pendente(
 
     cpf_limpo = normalizar_cpf(cpf)
 
+    if not validar_cpf(cpf_limpo):
+        raise ValueError("CPF inválido ou ausente.")
+
     try:
         with conectar() as conexao:
             conexao.execute(
@@ -150,9 +159,9 @@ def registrar_cancelamento_pendente(
                         if variante_id is not None
                         else None
                     ),
-                    sku,
-                    nome_produto,
-                    motivo,
+                    sanitizar_texto_cpf(sku) if sku else None,
+                    sanitizar_texto_cpf(nome_produto) if nome_produto else None,
+                    sanitizar_texto_cpf(motivo),
                 ),
             )
 
@@ -198,7 +207,7 @@ def atualizar_cancelamentos_do_pedido(
             """,
             (
                 status,
-                resposta_api,
+                sanitizar_texto_cpf(resposta_api) if resposta_api else None,
                 str(pedido_id),
             ),
         )
@@ -284,7 +293,7 @@ def atualizar_status_cancelamento(
             """,
             (
                 status,
-                resposta_api,
+                sanitizar_texto_cpf(resposta_api) if resposta_api else None,
                 cancelamento_id,
             ),
         )
@@ -336,7 +345,146 @@ def contar_cancelamentos_pendentes() -> int:
 
     return int(resultado["total"])
 
-def criar_banco() -> None:
+def _minimizar_logs_legados(conexao: sqlite3.Connection) -> int:
+    """Converte uma única vez CPFs legados em texto puro para máscara."""
+    conexao.execute(
+        """
+        CREATE TABLE IF NOT EXISTS manutencao_sistema (
+            chave TEXT PRIMARY KEY,
+            valor TEXT NOT NULL
+        )
+        """
+    )
+
+    ja_executada = conexao.execute(
+        "SELECT 1 FROM manutencao_sistema WHERE chave = ?",
+        ("migracao_logs_cpf_mascarado_v1",),
+    ).fetchone()
+
+    if ja_executada is not None:
+        return 0
+
+    linhas = conexao.execute(
+        "SELECT id, cpf FROM logs_processamento WHERE cpf IS NOT NULL"
+    ).fetchall()
+
+    alterados = 0
+    for linha in linhas:
+        valor_atual = str(linha["cpf"] or "")
+        # Só transforma valores que ainda contenham um CPF completo.
+        if len(normalizar_cpf(valor_atual)) != 11:
+            continue
+
+        conexao.execute(
+            "UPDATE logs_processamento SET cpf = ? WHERE id = ?",
+            (mascarar_cpf(valor_atual), linha["id"]),
+        )
+        alterados += 1
+
+    conexao.execute(
+        "INSERT OR REPLACE INTO manutencao_sistema (chave, valor) VALUES (?, ?)",
+        ("migracao_logs_cpf_mascarado_v1", str(int(time.time()))),
+    )
+
+    return alterados
+
+
+def _aplicar_retencao_lgpd(
+    conexao: sqlite3.Connection,
+    *,
+    forcar: bool = False,
+) -> dict[str, int]:
+    """
+    Minimiza dados pessoais antigos no máximo uma vez a cada 24 horas.
+
+    - compras antigas: removidas;
+    - cancelamentos antigos: CPF anonimizado;
+    - logs antigos: CPF anonimizado.
+    """
+    conexao.execute(
+        """
+        CREATE TABLE IF NOT EXISTS manutencao_sistema (
+            chave TEXT PRIMARY KEY,
+            valor TEXT NOT NULL
+        )
+        """
+    )
+
+    agora = int(time.time())
+    linha = conexao.execute(
+        "SELECT valor FROM manutencao_sistema WHERE chave = ?",
+        ("ultima_retencao_lgpd",),
+    ).fetchone()
+
+    if linha is not None and not forcar:
+        try:
+            ultima_execucao = int(linha["valor"])
+        except (TypeError, ValueError):
+            ultima_execucao = 0
+
+        if agora - ultima_execucao < 86_400:
+            return {
+                "compras_removidas": 0,
+                "cancelamentos_anonimizados": 0,
+                "logs_anonimizados": 0,
+            }
+
+    modificador = f"-{LGPD_RETENCAO_DIAS} days"
+
+    compras = conexao.execute(
+        """
+        DELETE FROM compras
+        WHERE datetime(criado_em) < datetime('now', ?)
+        """,
+        (modificador,),
+    ).rowcount
+
+    cancelamentos = conexao.execute(
+        """
+        UPDATE cancelamentos
+        SET cpf = NULL
+        WHERE cpf IS NOT NULL
+          AND datetime(criado_em) < datetime('now', ?)
+        """,
+        (modificador,),
+    ).rowcount
+
+    logs = conexao.execute(
+        """
+        UPDATE logs_processamento
+        SET cpf = NULL
+        WHERE cpf IS NOT NULL
+          AND datetime(criado_em) < datetime('now', ?)
+        """,
+        (modificador,),
+    ).rowcount
+
+    conexao.execute(
+        """
+        INSERT INTO manutencao_sistema (chave, valor)
+        VALUES (?, ?)
+        ON CONFLICT(chave) DO UPDATE SET valor = excluded.valor
+        """,
+        ("ultima_retencao_lgpd", str(agora)),
+    )
+
+    return {
+        "compras_removidas": max(compras, 0),
+        "cancelamentos_anonimizados": max(cancelamentos, 0),
+        "logs_anonimizados": max(logs, 0),
+    }
+
+
+def executar_retencao_lgpd(*, forcar: bool = False) -> dict[str, int]:
+    """Executa manualmente a política de retenção/anonimização."""
+    criar_banco(executar_retencao=False)
+    with conectar() as conexao:
+        resultado = _aplicar_retencao_lgpd(conexao, forcar=forcar)
+        conexao.commit()
+    return resultado
+
+
+def criar_banco(*, executar_retencao: bool = True) -> None:
     """
     Cria as tabelas necessárias caso ainda não existam.
     """
@@ -490,6 +638,11 @@ def criar_banco() -> None:
             ON compras(pedido_id)
             """
         )
+
+        _minimizar_logs_legados(conexao)
+
+        if executar_retencao:
+            _aplicar_retencao_lgpd(conexao)
 
         conexao.commit()
 
@@ -807,7 +960,7 @@ def registrar_compra(
     produto_id_texto = str(produto_id)
     pedido_id_texto = str(pedido_id)
 
-    if len(cpf_limpo) != 11:
+    if not validar_cpf(cpf_limpo):
         raise ValueError("CPF inválido ou ausente.")
 
     if not produto_id_texto:
@@ -1003,6 +1156,8 @@ def teste_banco() -> None:
         nome_produto="Produto de teste",
         quantidade=1,
         pedido_id=2020473950,
+        pedido_criado_em="2026-01-01T12:00:00-03:00",
+        data_pedido="2026-01-01",
         numero_pedido=614,
         status_pedido="open",
         status_pagamento="paid",
@@ -1022,7 +1177,9 @@ def teste_banco() -> None:
     print("\nCompras do CPF:")
 
     for compra in listar_compras_por_cpf(cpf_teste):
-        print(compra)
+        compra_segura = dict(compra)
+        compra_segura["cpf"] = mascarar_cpf(compra_segura.get("cpf"))
+        print(compra_segura)
 
 
 if __name__ == "__main__":

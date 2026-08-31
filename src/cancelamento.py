@@ -7,6 +7,7 @@ from src.config import (
     CANCELAMENTO_REPOR_ESTOQUE,
 )
 from src.nuvemshop import fazer_requisicao
+from src.verificacao import sanitizar_texto_cpf
 
 
 def cancelar_pedido_nuvemshop(
@@ -92,11 +93,12 @@ def resposta_para_texto(
     """
 
     try:
-        return json.dumps(
+        texto = json.dumps(
             resultado,
             ensure_ascii=False,
             default=str,
         )
+        return sanitizar_texto_cpf(texto)
 
     except TypeError:
-        return str(resultado)
+        return sanitizar_texto_cpf(resultado)

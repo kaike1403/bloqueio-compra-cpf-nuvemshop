@@ -3,6 +3,7 @@ from typing import Any
 import requests
 
 from src.config import obter_headers, obter_url
+from src.verificacao import sanitizar_texto_cpf
 
 
 def fazer_requisicao(
@@ -35,10 +36,10 @@ def fazer_requisicao(
             f"Erro HTTP {erro.response.status_code} "
             f"em {endpoint}"
         )
-        print(f"Resposta da API: {erro.response.text}")
+        print(f"Resposta da API: {sanitizar_texto_cpf(erro.response.text)}")
 
     except requests.exceptions.RequestException as erro:
-        print(f"Erro na requisição: {erro}")
+        print(f"Erro na requisição: {sanitizar_texto_cpf(erro)}")
 
     return None
 

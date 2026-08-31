@@ -1,7 +1,9 @@
 import { copyFile, mkdir } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const raiz = resolve(import.meta.dirname, "..");
+const aqui = dirname(fileURLToPath(import.meta.url));
+const raiz = resolve(aqui, "..");
 const origem = resolve(raiz, "dist", "main.js");
 const destino = resolve(raiz, "..", "public", "checkout-validator.js");
 

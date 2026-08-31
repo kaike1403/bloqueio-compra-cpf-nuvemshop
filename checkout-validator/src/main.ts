@@ -124,6 +124,16 @@ export function App(nube: NubeSDK): void {
   nube.send("config:set", () => ({ config: { has_cart_validation: true } }));
   enviarResultado(nube, false, MENSAGEM_VALIDANDO);
 
+  // O checkout pode reconstruir a validação nos primeiros instantes de carga.
+  // Reafirmamos o bloqueio sem aguardar qualquer chamada de rede.
+  for (const atraso of [0, 50, 150]) {
+    setTimeout(() => {
+      if (checkoutBloqueado) {
+        enviarResultado(nube, false, motivoBloqueioAtual || MENSAGEM_VALIDANDO);
+      }
+    }, atraso);
+  }
+
   function obterSnapshot(): SnapshotCheckout {
     const estado = nube.getState() as any;
     const cpf = obterCpfDoEstado(estado);
@@ -176,8 +186,10 @@ export function App(nube: NubeSDK): void {
       code: codigo,
       message: "A validação está temporariamente indisponível. O checkout foi liberado.",
     };
-    ultimaChaveValidada = snapshot.chave;
-    ultimoResultado = resultado;
+    // Fail-open técnico não vira autorização cacheável. Se qualquer evento
+    // relevante ocorrer depois, o checkout volta a validar.
+    ultimaChaveValidada = "";
+    ultimoResultado = null;
     aplicarResultado(resultado);
   }
 
@@ -268,7 +280,7 @@ export function App(nube: NubeSDK): void {
       const resultado = await resposta.json().catch(() => ({})) as RespostaValidacao;
 
       if (!resposta.ok) {
-        if ([400, 401, 403, 429].includes(resposta.status)) {
+        if ([400, 401, 403, 413, 422, 429].includes(resposta.status)) {
           checkoutToken = "";
           checkoutTokenExpiraEmMs = 0;
           throw new ErroSegurancaCheckout(
@@ -288,7 +300,7 @@ export function App(nube: NubeSDK): void {
       if (numeroValidacao !== contadorValidacao) return;
 
       if (erro instanceof ErroSegurancaCheckout) {
-        if ([400, 401, 403, 429].includes(Number(erro.status))) {
+        if ([400, 401, 403, 413, 422, 429].includes(Number(erro.status))) {
           const resultado: RespostaValidacao = {
             allowed: false,
             code: "VALIDATION_SECURITY_BLOCKED",

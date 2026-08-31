@@ -25,6 +25,8 @@ from src.produtos_controlados import produto_esta_controlado
 from src.verificacao import (
     extrair_cpf_do_pedido,
     extrair_produtos_do_pedido,
+    mascarar_cpf,
+    validar_cpf,
 )
 
 
@@ -284,12 +286,21 @@ def processar_pedido(
 
     resultado["cpf_encontrado"] = True
 
-    # Exibe somente parte do CPF no terminal.
-    cpf_mascarado = (
-        f"{cpf[:3]}.***.***-{cpf[-2:]}"
-    )
+    if not validar_cpf(cpf):
+        mensagem = "CPF matematicamente inválido no pedido."
+        print(mensagem)
+        resultado["erros"].append(mensagem)
 
-    print(f"CPF localizado: {cpf_mascarado}")
+        registrar_log(
+            resultado="rejeitado",
+            motivo="CPF matematicamente inválido",
+            pedido_id=pedido.get("id"),
+            numero_pedido=numero_pedido,
+            cpf=cpf,
+        )
+        return resultado
+
+    print(f"CPF localizado: {mascarar_cpf(cpf)}")
 
     produtos = extrair_produtos_do_pedido(pedido)
     produtos_controlados_no_pedido = [

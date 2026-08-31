@@ -4,13 +4,9 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from src.banco import (
-    buscar_compra_paga_do_dia,
-    normalizar_cpf,
-)
-from src.produtos_controlados import (
-    obter_configuracao_produto,
-)
+from src.banco import buscar_compra_paga_do_dia
+from src.produtos_controlados import obter_configuracao_produto
+from src.verificacao import normalizar_cpf, validar_cpf
 
 
 FUSO_HORARIO_LOJA = ZoneInfo("America/Sao_Paulo")
@@ -49,25 +45,6 @@ def normalizar_produto_id(valor: Any) -> str:
 
     return str(valor).strip()
 
-
-def cpf_valido(cpf: str) -> bool:
-    """Valida tamanho, repetição e dígitos verificadores do CPF."""
-
-    if len(cpf) != 11 or cpf == cpf[0] * 11:
-        return False
-
-    for tamanho in (9, 10):
-        soma = sum(
-            int(cpf[indice]) * (tamanho + 1 - indice)
-            for indice in range(tamanho)
-        )
-        digito = (soma * 10) % 11
-        if digito == 10:
-            digito = 0
-        if digito != int(cpf[tamanho]):
-            return False
-
-    return True
 
 
 def validar_checkout(
@@ -198,7 +175,7 @@ def validar_checkout(
             ),
         }
 
-    if not cpf_valido(cpf):
+    if not validar_cpf(cpf):
         return {
             "allowed": False,
             "code": "INVALID_CPF",

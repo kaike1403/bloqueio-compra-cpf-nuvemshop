@@ -29,14 +29,28 @@ from src.produtos_controlados import (
 )
 
 
+from src.config import ADMIN_PATH
+from src.rate_limit import limiter
 from src.seguranca import obter_token_csrf, proteger_admin, validar_csrf_admin
 
 
 admin_bp = Blueprint(
     "admin",
     __name__,
-    url_prefix="/admin",
+    url_prefix=ADMIN_PATH,
 )
+
+# Como o painel usa HTTP Basic, a resposta 401 é a tentativa de login.
+# Os limites abaixo contabilizam apenas respostas 401 e são compartilhados
+# pelo mesmo Limiter usado no checkout.
+limiter.limit(
+    "5 per minute",
+    deduct_when=lambda resposta: resposta.status_code == 401,
+)(admin_bp)
+limiter.limit(
+    "20 per hour",
+    deduct_when=lambda resposta: resposta.status_code == 401,
+)(admin_bp)
 
 
 @admin_bp.before_request
@@ -46,6 +60,13 @@ def exigir_autenticacao_admin():
         return resposta
     validar_csrf_admin()
     return None
+
+
+@admin_bp.after_request
+def impedir_cache_admin(resposta):
+    resposta.headers["Cache-Control"] = "no-store, max-age=0"
+    resposta.headers["Pragma"] = "no-cache"
+    return resposta
 
 
 @admin_bp.app_context_processor
