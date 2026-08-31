@@ -82,7 +82,6 @@ MODO_AUTOMATICO = (
     ).strip().lower() == "true"
 )
 
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "").strip()
 
 CORS_ORIGINS = [
     origem.strip()
@@ -96,3 +95,16 @@ NUVEMSHOP_APP_SECRET = os.getenv(
     "NUVEMSHOP_APP_SECRET",
     "",
 ).strip()
+
+CHECKOUT_TOKEN_SECRET = os.getenv(
+    "CHECKOUT_TOKEN_SECRET",
+    "",
+).strip()
+
+try:
+    CHECKOUT_TOKEN_TTL_SECONDS = max(
+        60,
+        min(900, int(os.getenv("CHECKOUT_TOKEN_TTL_SECONDS", "300"))),
+    )
+except ValueError:
+    CHECKOUT_TOKEN_TTL_SECONDS = 300

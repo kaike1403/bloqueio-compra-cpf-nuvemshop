@@ -1,15 +1,43 @@
-const API_URL = "https://bloqueio-compra-cpf-nuvemshop.onrender.com/api/validar-checkout";
+const API_BASE_URL = "https://bloqueio-compra-cpf-nuvemshop.onrender.com/api";
+const API_URL = `${API_BASE_URL}/validar-checkout`;
+const TOKEN_URL = `${API_BASE_URL}/checkout-token`;
 const TEMPO_LIMITE_API_MS = 10000;
 const ATRASO_VALIDACAO_MS = 120;
-const INTERVALO_REAPLICACAO_MS = 1000;
+const INTERVALO_REAPLICACAO_MS = 250;
+const MARGEM_RENOVACAO_TOKEN_MS = 30000;
+const MENSAGEM_VALIDANDO = "Validando CPF e produtos do carrinho...";
+class ErroSegurancaCheckout extends Error {
+    constructor(status, mensagem) {
+        super(mensagem);
+        this.status = status;
+        this.name = "ErroSegurancaCheckout";
+    }
+}
 function limparCpf(valor) {
     return String(valor ?? "").replace(/\D/g, "");
 }
+function validarCpfLocal(cpf) {
+    const valor = limparCpf(cpf);
+    if (valor.length !== 11 || /^(\d)\1{10}$/.test(valor))
+        return false;
+    for (const tamanho of [9, 10]) {
+        let soma = 0;
+        for (let indice = 0; indice < tamanho; indice += 1) {
+            soma += Number(valor[indice]) * (tamanho + 1 - indice);
+        }
+        let digito = (soma * 10) % 11;
+        if (digito === 10)
+            digito = 0;
+        if (digito !== Number(valor[tamanho]))
+            return false;
+    }
+    return true;
+}
 function obterCpfDoEstado(estado) {
     const raiz = (estado ?? {});
-    const customer = (raiz.customer ?? {});
-    const billing = (customer.billing_address ?? {});
-    const shipping = (customer.shipping_address ?? {});
+    const customer = raiz.customer ?? {};
+    const billing = customer.billing_address ?? {};
+    const shipping = customer.shipping_address ?? {};
     const candidatos = [
         customer.cpf_cnpj,
         customer.identification,
@@ -24,23 +52,21 @@ function obterCpfDoEstado(estado) {
         shipping.cpf_cnpj,
     ];
     for (const candidato of candidatos) {
-        const cpf = limparCpf(typeof candidato === "string" || typeof candidato === "number"
-            ? String(candidato)
-            : "");
-        if (cpf.length === 11) {
+        const cpf = limparCpf(candidato);
+        if (cpf.length === 11 && validarCpfLocal(cpf))
             return cpf;
-        }
+    }
+    for (const candidato of candidatos) {
+        const cpf = limparCpf(candidato);
+        if (cpf.length === 11)
+            return cpf;
     }
     return "";
 }
 function enviarResultado(nube, permitido, mensagem) {
-    if (permitido) {
+    if (permitido === true) {
         nube.send("cart:validate", () => ({
-            cart: {
-                validation: {
-                    status: "success",
-                },
-            },
+            cart: { validation: { status: "success" } },
         }));
         return;
     }
@@ -48,8 +74,7 @@ function enviarResultado(nube, permitido, mensagem) {
         cart: {
             validation: {
                 status: "fail",
-                reason: mensagem ||
-                    "Não foi possível validar esta compra.",
+                reason: mensagem || "Não foi possível validar esta compra.",
             },
         },
     }));
@@ -62,81 +87,96 @@ export function App(nube) {
     let contadorValidacao = 0;
     let controladorAtual = null;
     let temporizadorValidacao = null;
-    nube.send("config:set", () => ({
-        config: {
-            has_cart_validation: true,
-        },
-    }));
+    let checkoutToken = "";
+    let checkoutTokenExpiraEmMs = 0;
+    let checkoutBloqueado = true;
+    let motivoBloqueioAtual = MENSAGEM_VALIDANDO;
+    nube.send("config:set", () => ({ config: { has_cart_validation: true } }));
+    enviarResultado(nube, false, MENSAGEM_VALIDANDO);
     function obterSnapshot() {
         const estado = nube.getState();
-        // Também funciona no checkout como visitante. Nesse fluxo,
-        // o documento pode aparecer somente no endereço de cobrança
-        // ou em identification, sem existir um cliente autenticado.
         const cpf = obterCpfDoEstado(estado);
-        const itens = estado.cart.items.map((item) => ({
-            product_id: String(item.product_id),
-            variant_id: String(item.variant_id),
-            quantity: Number(item.quantity ?? 0),
-            name: String(item.name ?? ""),
+        const storeId = String(estado?.store?.id ?? "");
+        const sessionId = String(estado?.session?.id ?? "");
+        const itensOriginais = Array.isArray(estado?.cart?.items) ? estado.cart.items : [];
+        const itens = itensOriginais.map((item) => ({
+            product_id: String(item?.product_id ?? ""),
+            variant_id: String(item?.variant_id ?? ""),
+            quantity: Number(item?.quantity ?? 0),
+            name: String(item?.name ?? ""),
         }));
         const chave = JSON.stringify({
             cpf,
+            storeId,
+            sessionId,
             itens: itens.map((item) => ({
                 product_id: item.product_id,
                 variant_id: item.variant_id,
                 quantity: item.quantity,
             })),
         });
-        return {
-            cpf,
-            itens,
-            chave,
-        };
+        return { cpf, itens, storeId, sessionId, chave };
     }
     function aplicarResultado(resultado) {
-        enviarResultado(nube, resultado.allowed === true, resultado.message);
+        if (resultado?.allowed === true) {
+            checkoutBloqueado = false;
+            motivoBloqueioAtual = "";
+            enviarResultado(nube, true);
+            return;
+        }
+        checkoutBloqueado = true;
+        motivoBloqueioAtual = resultado?.message || "Esta compra não foi autorizada pela validação.";
+        enviarResultado(nube, false, motivoBloqueioAtual);
     }
     function bloquearDuranteValidacao() {
-        enviarResultado(nube, false, "Validando CPF e produtos do carrinho...");
+        checkoutBloqueado = true;
+        motivoBloqueioAtual = MENSAGEM_VALIDANDO;
+        enviarResultado(nube, false, MENSAGEM_VALIDANDO);
     }
-    function reaplicarResultadoConhecido() {
-        const snapshot = obterSnapshot();
-        if (ultimoResultado &&
-            snapshot.chave === ultimaChaveValidada) {
-            aplicarResultado(ultimoResultado);
-            return true;
+    function liberarPorIndisponibilidade(snapshot, codigo = "VALIDATION_UNAVAILABLE_ALLOWED") {
+        const resultado = {
+            allowed: true,
+            code: codigo,
+            message: "A validação está temporariamente indisponível. O checkout foi liberado.",
+        };
+        ultimaChaveValidada = snapshot.chave;
+        ultimoResultado = resultado;
+        aplicarResultado(resultado);
+    }
+    function reaplicarBloqueioAtual() {
+        if (checkoutBloqueado) {
+            enviarResultado(nube, false, motivoBloqueioAtual || MENSAGEM_VALIDANDO);
         }
-        return false;
     }
-    async function validarCheckout(forcarConsulta = false, bloquearEnquantoConsulta = true) {
+    async function obterTokenCheckout(snapshot, signal) {
+        if (checkoutToken && Date.now() + MARGEM_RENOVACAO_TOKEN_MS < checkoutTokenExpiraEmMs) {
+            return checkoutToken;
+        }
+        const resposta = await fetch(TOKEN_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ store_id: snapshot.storeId, session_id: snapshot.sessionId }),
+            signal,
+        });
+        const corpo = await resposta.json().catch(() => ({}));
+        if (!resposta.ok || !corpo.success || !corpo.token) {
+            throw new ErroSegurancaCheckout(resposta.status, corpo.message || "Não foi possível autenticar o checkout.");
+        }
+        checkoutToken = corpo.token;
+        checkoutTokenExpiraEmMs = Number(corpo.expires_at ?? 0) * 1000;
+        return checkoutToken;
+    }
+    async function validarCheckout(forcarConsulta = false) {
         const snapshot = obterSnapshot();
-        /*
-         * O checkout pode limpar o estado de cart:validate ao
-         * trocar pagamento, frete ou ao reconstruir a tela.
-         * Mesmo que CPF e itens não tenham mudado, reenviamos o
-         * último resultado para manter o botão bloqueado.
-         */
-        if (!forcarConsulta &&
-            ultimoResultado &&
-            snapshot.chave === ultimaChaveValidada) {
+        if (!forcarConsulta && ultimoResultado && snapshot.chave === ultimaChaveValidada) {
             aplicarResultado(ultimoResultado);
             return;
         }
-        /* Evita requisições duplicadas para o mesmo estado. */
-        if (validacaoEmAndamento &&
-            snapshot.chave === chaveEmValidacao) {
-            if (!reaplicarResultadoConhecido() && bloquearEnquantoConsulta) {
-                bloquearDuranteValidacao();
-            }
+        if (validacaoEmAndamento && snapshot.chave === chaveEmValidacao) {
+            reaplicarBloqueioAtual();
             return;
         }
-        if (bloquearEnquantoConsulta) {
-            bloquearDuranteValidacao();
-        }
-        /*
-         * Se CPF ou carrinho mudaram, a resposta antiga não pode
-         * sobrescrever a validação do estado novo.
-         */
+        bloquearDuranteValidacao();
         controladorAtual?.abort();
         const numeroValidacao = ++contadorValidacao;
         const controlador = new AbortController();
@@ -145,54 +185,76 @@ export function App(nube) {
         chaveEmValidacao = snapshot.chave;
         const temporizadorApi = setTimeout(() => controlador.abort(), TEMPO_LIMITE_API_MS);
         try {
+            if (snapshot.cpf && !validarCpfLocal(snapshot.cpf)) {
+                const resultado = {
+                    allowed: false,
+                    code: "INVALID_CPF",
+                    message: "Informe um CPF válido para continuar a compra.",
+                };
+                ultimaChaveValidada = snapshot.chave;
+                ultimoResultado = resultado;
+                aplicarResultado(resultado);
+                return;
+            }
+            if (!snapshot.storeId || !snapshot.sessionId) {
+                liberarPorIndisponibilidade(snapshot, "CHECKOUT_CONTEXT_UNAVAILABLE_ALLOWED");
+                return;
+            }
+            const token = await obterTokenCheckout(snapshot, controlador.signal);
             const resposta = await fetch(API_URL, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
+                    "X-Store-ID": snapshot.storeId,
+                    "X-Checkout-Session": snapshot.sessionId,
+                    "X-Checkout-Token": token,
                 },
-                body: JSON.stringify({
-                    cpf: snapshot.cpf,
-                    items: snapshot.itens,
-                }),
+                body: JSON.stringify({ cpf: snapshot.cpf, items: snapshot.itens }),
                 signal: controlador.signal,
             });
+            const resultado = await resposta.json().catch(() => ({}));
             if (!resposta.ok) {
+                if ([400, 401, 403, 429].includes(resposta.status)) {
+                    checkoutToken = "";
+                    checkoutTokenExpiraEmMs = 0;
+                    throw new ErroSegurancaCheckout(resposta.status, resultado.message || "A validação de segurança recusou a solicitação.");
+                }
                 throw new Error(`Erro HTTP ${resposta.status}`);
             }
-            const resultado = (await resposta.json());
-            if (numeroValidacao !== contadorValidacao) {
+            if (numeroValidacao !== contadorValidacao)
                 return;
-            }
             ultimaChaveValidada = snapshot.chave;
             ultimoResultado = resultado;
             aplicarResultado(resultado);
             console.log("[Bloqueio CPF] Validação:", resultado.code ?? "SEM_CODIGO");
         }
         catch (erro) {
-            if (numeroValidacao !== contadorValidacao) {
+            if (numeroValidacao !== contadorValidacao)
+                return;
+            if (erro instanceof ErroSegurancaCheckout) {
+                if ([400, 401, 403, 429].includes(Number(erro.status))) {
+                    const resultado = {
+                        allowed: false,
+                        code: "VALIDATION_SECURITY_BLOCKED",
+                        message: Number(erro.status) === 429
+                            ? "Muitas tentativas de validação. Aguarde alguns instantes."
+                            : "Não foi possível autenticar esta validação de checkout.",
+                    };
+                    ultimaChaveValidada = snapshot.chave;
+                    ultimoResultado = resultado;
+                    aplicarResultado(resultado);
+                    return;
+                }
+                liberarPorIndisponibilidade(snapshot);
                 return;
             }
-            if (erro instanceof DOMException &&
-                erro.name === "AbortError") {
+            if (erro instanceof DOMException && erro.name === "AbortError") {
                 console.warn("[Bloqueio CPF] Validação cancelada ou expirada.");
             }
             else {
                 console.error("[Bloqueio CPF] Erro ao consultar API:", erro);
             }
-            /*
-             * A compra permanece bloqueada durante toda a tentativa.
-             * Somente depois de timeout/erro real da API liberamos o
-             * checkout, conforme a regra operacional solicitada.
-             */
-            const resultadoIndisponivel = {
-                allowed: true,
-                code: "VALIDATION_UNAVAILABLE_ALLOWED",
-                message: "A validação não respondeu dentro do prazo. " +
-                    "O checkout foi liberado.",
-            };
-            ultimaChaveValidada = snapshot.chave;
-            ultimoResultado = resultadoIndisponivel;
-            aplicarResultado(resultadoIndisponivel);
+            liberarPorIndisponibilidade(snapshot);
         }
         finally {
             clearTimeout(temporizadorApi);
@@ -203,72 +265,36 @@ export function App(nube) {
             }
         }
     }
-    function agendarValidacao(forcarConsulta = false, bloquearEnquantoConsulta = true, atraso = ATRASO_VALIDACAO_MS) {
-        if (temporizadorValidacao !== null) {
+    function agendarValidacao(forcarConsulta = false, atraso = ATRASO_VALIDACAO_MS) {
+        if (temporizadorValidacao !== null)
             clearTimeout(temporizadorValidacao);
-        }
         temporizadorValidacao = setTimeout(() => {
             temporizadorValidacao = null;
-            void validarCheckout(forcarConsulta, bloquearEnquantoConsulta);
+            void validarCheckout(forcarConsulta);
         }, atraso);
     }
-    function tratarReconstrucaoDoCheckout(forcarConsulta = true) {
-        /* Reaplica imediatamente o bloqueio já conhecido. */
-        const reaplicado = reaplicarResultadoConhecido();
-        if (!reaplicado) {
-            bloquearDuranteValidacao();
-        }
-        /*
-         * Consulta novamente porque o status do pedido pode ter
-         * mudado no backend enquanto o cliente permaneceu aberto
-         * no checkout.
-         */
-        agendarValidacao(forcarConsulta, true);
-        /*
-         * Algumas partes do checkout são reconstruídas depois do
-         * evento. Reaplicamos novamente após a renderização.
-         */
-        setTimeout(() => {
-            if (!reaplicarResultadoConhecido()) {
-                agendarValidacao(false, true, 0);
-            }
-        }, 450);
+    function bloquearEAgendar(forcarConsulta = false, atraso = ATRASO_VALIDACAO_MS) {
+        bloquearDuranteValidacao();
+        agendarValidacao(forcarConsulta, atraso);
     }
-    nube.on("checkout:ready", () => {
-        tratarReconstrucaoDoCheckout();
-    });
-    nube.on("page:loaded", () => {
-        tratarReconstrucaoDoCheckout();
-    });
-    nube.on("cart:update", () => {
-        agendarValidacao(false, true);
-    });
-    nube.on("customer:update", () => {
-        agendarValidacao(false, true, 250);
-    });
-    nube.on("shipping:update", () => {
-        tratarReconstrucaoDoCheckout();
-    });
-    nube.on("payment:update", () => {
-        tratarReconstrucaoDoCheckout();
-    });
-    nube.on("location:updated", () => {
-        tratarReconstrucaoDoCheckout(false);
-    });
-    /*
-     * Proteção adicional: se o checkout limpar a validação sem
-     * emitir um evento documentado, um resultado de bloqueio é
-     * reaplicado periodicamente. Isso não chama a API.
-     */
+    function tratarReconstrucaoDoCheckout(forcarConsulta = true) {
+        bloquearDuranteValidacao();
+        agendarValidacao(forcarConsulta);
+        setTimeout(() => { if (checkoutBloqueado)
+            reaplicarBloqueioAtual(); }, 50);
+        setTimeout(() => { if (checkoutBloqueado)
+            reaplicarBloqueioAtual(); }, 250);
+    }
+    nube.on("checkout:ready", () => tratarReconstrucaoDoCheckout(true));
+    nube.on("page:loaded", () => tratarReconstrucaoDoCheckout(true));
+    nube.on("cart:update", () => bloquearEAgendar(false));
+    nube.on("customer:update", () => bloquearEAgendar(false, 120));
+    nube.on("shipping:update", () => tratarReconstrucaoDoCheckout(true));
+    nube.on("payment:update", () => tratarReconstrucaoDoCheckout(true));
+    nube.on("location:updated", () => bloquearEAgendar(false, 0));
     setInterval(() => {
-        if (ultimoResultado?.allowed === false) {
-            reaplicarResultadoConhecido();
-        }
+        if (checkoutBloqueado)
+            reaplicarBloqueioAtual();
     }, INTERVALO_REAPLICACAO_MS);
-    /*
-     * Fallback para carregamentos em que checkout:ready já foi
-     * emitido antes de o listener ser registrado.
-     */
-    bloquearDuranteValidacao();
-    agendarValidacao(true, true, 0);
+    agendarValidacao(true, 0);
 }
