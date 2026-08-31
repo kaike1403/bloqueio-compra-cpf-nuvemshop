@@ -1,83 +1,51 @@
 # Implantação segura
 
-## 1. Segredos
+## Segredos
 
-Configure no Render, no mínimo, `FLASK_SECRET_KEY`, `ADMIN_USER`, `ADMIN_PASSWORD`, `CHECKOUT_TOKEN_SECRET`, `NUVEMSHOP_APP_SECRET`, `NUVEMSHOP_STORE_ID`, `NUVEMSHOP_ACCESS_TOKEN` e `NUVEMSHOP_USER_AGENT`.
+Mantenha exclusivamente no backend: `NUVEMSHOP_APP_SECRET`, `CHECKOUT_TOKEN_SECRET`, `FLASK_SECRET_KEY`, `PRIVATE_ROUTE_SECRET`, credenciais da API e senha do admin. `NUVEMSHOP_APP_SECRET` continua sendo o único segredo usado para validar HMAC-SHA256 da Nuvemshop.
 
-`NUVEMSHOP_APP_SECRET` é o único segredo usado para validar HMAC-SHA256 dos webhooks. Não mantenha um segundo segredo paralelo para webhooks e nunca coloque `NUVEMSHOP_APP_SECRET`, `CHECKOUT_TOKEN_SECRET`, `ADMIN_PASSWORD` ou `FLASK_SECRET_KEY` no JavaScript público ou no Git.
+`PRIVATE_ROUTE_SECRET` possui finalidade diferente: derivar URLs não semânticas para reduzir enumeração e scanners genéricos. Não reutilize outro segredo para isso.
 
-Gere `FLASK_SECRET_KEY` e `CHECKOUT_TOKEN_SECRET` com valores independentes e longos. Exemplo no PowerShell:
+## Proteção das rotas
 
-```powershell
-python -c "import secrets; print(secrets.token_urlsafe(48))"
-```
+O painel `/admin` permanece legível, mas usa Basic Auth, CSRF, cookies seguros, `Cache-Control: no-store` e rate limit de tentativas inválidas.
 
-## 2. Webhooks de pedidos e LGPD
+As rotas servidor-servidor são derivadas por HMAC-SHA256 de `PRIVATE_ROUTE_SECRET`. As rotas do checkout usam identificadores opacos, sem nomes semânticos; como são consumidas pelo navegador, não são tratadas como segredo. `/` e métodos inválidos retornam 404 vazio.
 
-Todos os endpoints de webhook validam o corpo bruto com HMAC-SHA256 usando `NUVEMSHOP_APP_SECRET`, conferem `store_id`, limitam o tamanho do payload e rejeitam chamadas sem assinatura válida antes de executar qualquer consulta ou exclusão.
+Webhooks de pedido/LGPD ainda exigem HMAC da Nuvemshop e `store_id`; chamadas com assinatura ou loja inválidas respondem 404 vazio para reduzir enumeração. A obscuridade da URL é apenas uma camada adicional, nunca substitui HMAC.
 
-Rotas protegidas:
+As duas rotas de checkout continuam protegidas por origem permitida, `store_id`, `session_id`, token HMAC curto e rate limit. Como elas são chamadas por JavaScript no navegador, **não podem ser criptograficamente ocultadas do próprio cliente**: um usuário avançado consegue vê-las na aba Network. O ganho das rotas derivadas é contra descoberta casual/scanners; a segurança real continua sendo token + vínculo de contexto + limites.
 
-- `POST /webhooks/pedidos`
-- `POST /webhooks/lgpd/store-redact`
-- `POST /webhooks/lgpd/customer-redact`
-- `POST /webhooks/lgpd/customer-data-request`
+O health check usa uma rota derivada e responde apenas `{"status":"ok"}`.
 
-As rotas LGPD destrutivas nunca executam exclusões antes de HMAC e loja serem validados. `customer-data-request` responde de forma uniforme e não informa publicamente se um CPF foi localizado.
+## Bloqueio e interação no checkout
 
-Se `NUVEMSHOP_APP_SECRET` ou `NUVEMSHOP_STORE_ID` estiverem ausentes, os webhooks retornam 503 em vez de aceitar eventos silenciosamente.
+NubeSDK roda em Web Worker e, por desenho, não possui acesso a `document`, `window` ou ao DOM da página. Portanto, o projeto não tenta usar `pointer-events`, listeners DOM ou alterar diretamente o botão da Nuvemshop.
 
-## 3. Checkout e bots
+A proteção usa dois mecanismos oficiais:
 
-O NubeSDK inicia `cart:validate` em estado `fail` imediatamente. O debounce existe apenas para reduzir chamadas HTTP; ele não cria uma janela em que o checkout fique liberado antes da validação.
+- `cart:validate = fail` para bloquear o avanço/finalização;
+- `modal_content` para abrir um diálogo com backdrop durante a consulta e impedir interações com a página.
 
-Fluxo:
+O modal é reaplicado se o usuário tentar fechá-lo com Esc/backdrop enquanto a validação ainda estiver pendente. Assim que a validação termina, o slot é limpo. Para não criar deadlock no preenchimento do cadastro, a trava global de interação só é acionada quando já existe CPF com 11 dígitos; antes disso o cliente pode preencher os campos, enquanto o botão de finalizar continua bloqueado.
 
-1. checkout inicia bloqueado;
-2. `/api/checkout-token` emite token HMAC curto vinculado a `store_id`, `session_id` e `Origin`;
-3. `/api/validar-checkout` exige `X-Store-ID`, `X-Checkout-Session` e `X-Checkout-Token`;
-4. CPF e regras de produto são validados no backend;
-5. somente `allowed: true` libera uma validação normal.
+Uma resposta de regra de negócio negativa desbloqueia a página para correção, mas mantém `cart:validate = fail`. Uma resposta positiva libera tudo. Indisponibilidade técnica segue a decisão operacional fail-open e também libera tudo.
 
-Por decisão operacional deste projeto, indisponibilidade técnica real da infraestrutura é **fail-open**: timeout, falha de rede, rota temporariamente indisponível ou erro 5xx liberam a compra para não interromper vendas. Falhas de segurança/cliente como 400, 401, 403, 413, 422 e 429 permanecem bloqueadas para que um atacante não consiga provocar deliberadamente um erro e ganhar liberação.
+## Fail-open
 
-Essa proteção reduz bastante automação abusiva, mas um segredo permanente não pode ser mantido secreto em JavaScript. `Origin` também não é uma atestação criptográfica para clientes fora do navegador. Portanto, token curto e rate limit são camadas de redução de abuso, não prova absoluta de origem.
+Fail-open é aplicado apenas a indisponibilidade técnica real: timeout, falha de rede, rota de infraestrutura indisponível ou 5xx. Erros `400`, `401`, `403`, `413`, `422` e `429` permanecem bloqueantes para impedir que um cliente provoque deliberadamente uma falha de segurança e obtenha liberação.
 
-## 4. Rate limit
+## LGPD e logs
 
-O projeto usa uma única instância de Flask-Limiter:
+CPF continua validado matematicamente no backend. Logs técnicos devem armazenar somente CPF mascarado (`***.123.456-**`) e a retenção periódica é controlada por `LGPD_RETENCAO_DIAS`.
 
-- `/api/checkout-token`: 6/min e 30/h por IP + loja;
-- `/api/validar-checkout`: 15/min e 120/h por IP + loja;
-- `/admin`: tentativas Basic Auth que retornam 401 contam para 5/min e 20/h por IP;
-- webhooks possuem limite alto adicional para absorver abuso de rede sem atrapalhar tráfego normal.
+## Rotação de PRIVATE_ROUTE_SECRET
 
-Em produção com múltiplos workers/instâncias, configure `RATELIMIT_STORAGE_URI` com Redis. `memory://` deve ser usado apenas em desenvolvimento ou instância única.
+Rotacionar `PRIVATE_ROUTE_SECRET` altera as URLs servidor-servidor (webhooks e health). Depois da rotação:
 
-## 5. Admin e exposição de rotas
+1. rode `python -m src.private_routes`;
+2. atualize os quatro webhooks na Nuvemshop;
+3. atualize o Health Check Path do Render;
+4. faça o deploy do backend com o novo segredo.
 
-`/` retorna 404 e não publica mapa de endpoints. `/health` retorna apenas `{"status":"ok"}` e não informa versão, painel ou rota de checkout.
-
-O painel continua protegido por Basic Auth, CSRF, cookies `Secure`/`HttpOnly` e rate limit. `ADMIN_PATH` permite trocar `/admin` por um caminho menos óbvio, por exemplo `/gestao-<valor-aleatorio>`. Isso reduz ruído de scanners, mas **não substitui** autenticação. Para proteção mais forte, coloque o painel atrás de Cloudflare Access, VPN ou allowlist de IP.
-
-Webhooks e APIs usadas pelo checkout não podem ser realmente "ocultadas": os chamadores legítimos precisam alcançá-las e o JavaScript público revela as URLs. A proteção correta é autenticação, HMAC, token, CORS, rate limit e respostas mínimas.
-
-## 6. CPF e LGPD
-
-A validação matemática de CPF é centralizada em `src/verificacao.py` e reutilizada em `processador.py`, `checkout_service.py` e na persistência crítica.
-
-Logs técnicos nunca armazenam CPF completo. O formato de máscara é `***.123.456-**`. A migração do banco converte CPFs legados em texto puro na tabela `logs_processamento` para máscara, e mensagens/respostas persistidas passam por sanitização para remover CPFs encontrados em texto.
-
-`LGPD_RETENCAO_DIAS` controla a minimização periódica. No máximo uma vez por 24 horas, `banco.py`:
-
-- remove registros antigos de `compras`;
-- anonimiza CPF de `cancelamentos` antigos;
-- anonimiza CPF de `logs_processamento` antigos.
-
-Também existe `executar_retencao_lgpd(forcar=True)` para execução administrativa/manutenção. Ajuste o prazo à base legal e às obrigações reais da empresa; 180 dias é apenas o padrão técnico do projeto.
-
-## 7. Build e artefatos
-
-O fonte oficial do checkout é `checkout-validator/src/main.ts`. `npm run build` compila para `checkout-validator/dist/main.js` e publica automaticamente o mesmo conteúdo em `public/checkout-validator.js`.
-
-Não mantenha uma segunda árvore `src/checkout-validator/`. Não envie `.env`, bancos SQLite, `.git`, `node_modules`, `__pycache__` ou artefatos locais contendo dados pessoais.
+As URLs do checkout não dependem de `PRIVATE_ROUTE_SECRET`, portanto a rotação não exige republicar o JavaScript do checkout.

@@ -12,6 +12,7 @@ STORE_ID = os.getenv("NUVEMSHOP_STORE_ID", "").strip()
 ACCESS_TOKEN = os.getenv("NUVEMSHOP_ACCESS_TOKEN", "").strip()
 USER_AGENT = os.getenv("NUVEMSHOP_USER_AGENT", "").strip()
 NUVEMSHOP_APP_SECRET = os.getenv("NUVEMSHOP_APP_SECRET", "").strip()
+PRIVATE_ROUTE_SECRET = os.getenv("PRIVATE_ROUTE_SECRET", "").strip()
 
 API_BASE_URL = "https://api.nuvemshop.com.br/v1"
 

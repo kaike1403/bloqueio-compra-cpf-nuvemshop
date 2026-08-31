@@ -12,6 +12,7 @@ from src.checkout_auth import (
 )
 from src.checkout_service import validar_checkout
 from src.config import STORE_ID
+from src.private_routes import CHECKOUT_TOKEN_PATH, CHECKOUT_VALIDATE_PATH
 from src.rate_limit import (
     chave_checkout_token,
     chave_checkout_validacao,
@@ -19,7 +20,7 @@ from src.rate_limit import (
 )
 
 
-checkout_bp = Blueprint("checkout", __name__, url_prefix="/api")
+checkout_bp = Blueprint("checkout", __name__)
 
 
 def _erro(allowed: bool, code: str, message: str, status: int):
@@ -33,7 +34,7 @@ def _erro(allowed: bool, code: str, message: str, status: int):
     ), status
 
 
-@checkout_bp.route("/checkout-token", methods=["POST", "OPTIONS"])
+@checkout_bp.route(CHECKOUT_TOKEN_PATH, methods=["POST", "OPTIONS"])
 @limiter.limit(
     "6 per minute",
     key_func=chave_checkout_token,
@@ -95,7 +96,7 @@ def checkout_token_endpoint():
     ), 200
 
 
-@checkout_bp.route("/validar-checkout", methods=["POST", "OPTIONS"])
+@checkout_bp.route(CHECKOUT_VALIDATE_PATH, methods=["POST", "OPTIONS"])
 @limiter.limit(
     "15 per minute",
     key_func=chave_checkout_validacao,

@@ -13,6 +13,11 @@ from src.nuvemshop_webhook_security import (
     obter_assinatura_webhook,
 )
 from src.rate_limit import limiter
+from src.private_routes import (
+    LGPD_STORE_REDACT_PATH,
+    LGPD_CUSTOMER_REDACT_PATH,
+    LGPD_CUSTOMER_DATA_PATH,
+)
 from src.verificacao import mascarar_cpf, validar_cpf
 
 
@@ -59,6 +64,8 @@ def _validar_webhook_lgpd() -> dict[str, Any]:
 
 
 def _resposta_erro(erro: WebhookLgpdInvalido):
+    if erro.status in {401, 403}:
+        return "", 404
     return jsonify({"success": False, "error": erro.mensagem}), erro.status
 
 
@@ -123,7 +130,7 @@ def remover_dados_do_cpf(cpf: str) -> dict[str, int]:
     }
 
 
-@lgpd_bp.route("/webhooks/lgpd/store-redact", methods=["POST"])
+@lgpd_bp.route(LGPD_STORE_REDACT_PATH, methods=["POST"])
 @limiter.limit("60 per minute", methods=["POST"])
 def store_redact():
     """Exclusão da loja: só executa após HMAC e store_id válidos."""
@@ -159,7 +166,7 @@ def store_redact():
     ), 200
 
 
-@lgpd_bp.route("/webhooks/lgpd/customer-redact", methods=["POST"])
+@lgpd_bp.route(LGPD_CUSTOMER_REDACT_PATH, methods=["POST"])
 @limiter.limit("60 per minute", methods=["POST"])
 def customer_redact():
     """Exclusão de cliente autenticada pelo HMAC da Nuvemshop."""
@@ -177,7 +184,7 @@ def customer_redact():
     return jsonify({"success": True}), 200
 
 
-@lgpd_bp.route("/webhooks/lgpd/customer-data-request", methods=["POST"])
+@lgpd_bp.route(LGPD_CUSTOMER_DATA_PATH, methods=["POST"])
 @limiter.limit("60 per minute", methods=["POST"])
 def customer_data_request():
     """Confirma solicitação LGPD sem atuar como oráculo de existência."""

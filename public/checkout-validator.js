@@ -1,11 +1,15 @@
-const API_BASE_URL = "https://bloqueio-compra-cpf-nuvemshop.onrender.com/api";
-const API_URL = `${API_BASE_URL}/validar-checkout`;
-const TOKEN_URL = `${API_BASE_URL}/checkout-token`;
+const API_ORIGIN = "https://bloqueio-compra-cpf-nuvemshop.onrender.com";
+const TOKEN_PATH = "/_nsv/a646e9ba169dc7f01c5845c5e6019d24";
+const VALIDATE_PATH = "/_nsv/0f6958d6a5d10f3bb4b28ce4c3c302dc";
+const TOKEN_URL = `${API_ORIGIN}${TOKEN_PATH}`;
+const API_URL = `${API_ORIGIN}${VALIDATE_PATH}`;
 const TEMPO_LIMITE_API_MS = 10000;
 const ATRASO_VALIDACAO_MS = 120;
 const INTERVALO_REAPLICACAO_MS = 250;
 const MARGEM_RENOVACAO_TOKEN_MS = 30000;
 const MENSAGEM_VALIDANDO = "Validando CPF e produtos do carrinho...";
+const MENSAGEM_TRAVA_INTERACOES = "Validando sua compra. Aguarde alguns instantes...";
+const STATUS_SEGURANCA_BLOQUEANTES = new Set([400, 401, 403, 413, 422, 429]);
 class ErroSegurancaCheckout extends Error {
     constructor(status, mensagem) {
         super(mensagem);
@@ -56,6 +60,8 @@ function obterCpfDoEstado(estado) {
         if (cpf.length === 11 && validarCpfLocal(cpf))
             return cpf;
     }
+    // Retorna também um CPF de 11 dígitos inválido para que o fluxo possa
+    // bloqueá-lo explicitamente como INVALID_CPF.
     for (const candidato of candidatos) {
         const cpf = limparCpf(candidato);
         if (cpf.length === 11)
@@ -79,6 +85,25 @@ function enviarResultado(nube, permitido, mensagem) {
         },
     }));
 }
+function hashBase36(valor) {
+    let hash = 5381;
+    for (let indice = 0; indice < valor.length; indice += 1) {
+        hash = (hash * 33) ^ valor.charCodeAt(indice);
+    }
+    return (hash >>> 0).toString(36);
+}
+function componenteModalValidacao() {
+    // NubeSDK roda em Web Worker e não permite document/window. O slot
+    // modal_content é a forma oficial de criar um backdrop sobre o checkout.
+    const appIdBruto = String(self.__APP_DATA__?.id ?? "cpfcheckout");
+    const appId = appIdBruto.replace(/[^a-zA-Z0-9]/g, "") || "cpfcheckout";
+    return {
+        type: "txt",
+        children: MENSAGEM_TRAVA_INTERACOES,
+        modifiers: ["bold"],
+        __internalId: `txt-${appId}-${hashBase36(MENSAGEM_TRAVA_INTERACOES)}`,
+    };
+}
 export function App(nube) {
     let validacaoEmAndamento = false;
     let chaveEmValidacao = "";
@@ -91,17 +116,7 @@ export function App(nube) {
     let checkoutTokenExpiraEmMs = 0;
     let checkoutBloqueado = true;
     let motivoBloqueioAtual = MENSAGEM_VALIDANDO;
-    nube.send("config:set", () => ({ config: { has_cart_validation: true } }));
-    enviarResultado(nube, false, MENSAGEM_VALIDANDO);
-    // O checkout pode reconstruir a validação nos primeiros instantes de carga.
-    // Reafirmamos o bloqueio sem aguardar qualquer chamada de rede.
-    for (const atraso of [0, 50, 150]) {
-        setTimeout(() => {
-            if (checkoutBloqueado) {
-                enviarResultado(nube, false, motivoBloqueioAtual || MENSAGEM_VALIDANDO);
-            }
-        }, atraso);
-    }
+    let interacoesBloqueadas = false;
     function obterSnapshot() {
         const estado = nube.getState();
         const cpf = obterCpfDoEstado(estado);
@@ -126,7 +141,32 @@ export function App(nube) {
         });
         return { cpf, itens, storeId, sessionId, chave };
     }
+    function deveTravarInteracoes(snapshot) {
+        // Não bloqueia campos enquanto o cliente ainda está preenchendo o CPF.
+        // O botão de finalizar continua bloqueado por cart:validate desde o início.
+        return snapshot.cpf.length === 11;
+    }
+    function bloquearInteracoes(snapshot) {
+        if (!deveTravarInteracoes(snapshot)) {
+            if (interacoesBloqueadas) {
+                interacoesBloqueadas = false;
+                nube.clearSlot("modal_content");
+            }
+            return;
+        }
+        interacoesBloqueadas = true;
+        nube.render("modal_content", componenteModalValidacao());
+    }
+    function liberarInteracoes() {
+        if (!interacoesBloqueadas)
+            return;
+        interacoesBloqueadas = false;
+        nube.clearSlot("modal_content");
+    }
     function aplicarResultado(resultado) {
+        // A validação terminou. A página volta a ser interativa mesmo quando a
+        // regra de negócio mantém somente o botão de finalizar bloqueado.
+        liberarInteracoes();
         if (resultado?.allowed === true) {
             checkoutBloqueado = false;
             motivoBloqueioAtual = "";
@@ -134,22 +174,24 @@ export function App(nube) {
             return;
         }
         checkoutBloqueado = true;
-        motivoBloqueioAtual = resultado?.message || "Esta compra não foi autorizada pela validação.";
+        motivoBloqueioAtual =
+            resultado?.message || "Esta compra não foi autorizada pela validação.";
         enviarResultado(nube, false, motivoBloqueioAtual);
     }
-    function bloquearDuranteValidacao() {
+    function bloquearDuranteValidacao(snapshot) {
         checkoutBloqueado = true;
         motivoBloqueioAtual = MENSAGEM_VALIDANDO;
         enviarResultado(nube, false, MENSAGEM_VALIDANDO);
+        bloquearInteracoes(snapshot);
     }
-    function liberarPorIndisponibilidade(snapshot, codigo = "VALIDATION_UNAVAILABLE_ALLOWED") {
+    function liberarPorIndisponibilidade(_snapshot, codigo = "VALIDATION_UNAVAILABLE_ALLOWED") {
         const resultado = {
             allowed: true,
             code: codigo,
             message: "A validação está temporariamente indisponível. O checkout foi liberado.",
         };
-        // Fail-open técnico não vira autorização cacheável. Se qualquer evento
-        // relevante ocorrer depois, o checkout volta a validar.
+        // Fail-open técnico não vira autorização cacheável. Um novo evento do
+        // checkout tentará validar novamente.
         ultimaChaveValidada = "";
         ultimoResultado = null;
         aplicarResultado(resultado);
@@ -160,13 +202,17 @@ export function App(nube) {
         }
     }
     async function obterTokenCheckout(snapshot, signal) {
-        if (checkoutToken && Date.now() + MARGEM_RENOVACAO_TOKEN_MS < checkoutTokenExpiraEmMs) {
+        if (checkoutToken &&
+            Date.now() + MARGEM_RENOVACAO_TOKEN_MS < checkoutTokenExpiraEmMs) {
             return checkoutToken;
         }
         const resposta = await fetch(TOKEN_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ store_id: snapshot.storeId, session_id: snapshot.sessionId }),
+            body: JSON.stringify({
+                store_id: snapshot.storeId,
+                session_id: snapshot.sessionId,
+            }),
             signal,
         });
         const corpo = await resposta.json().catch(() => ({}));
@@ -185,9 +231,10 @@ export function App(nube) {
         }
         if (validacaoEmAndamento && snapshot.chave === chaveEmValidacao) {
             reaplicarBloqueioAtual();
+            bloquearInteracoes(snapshot);
             return;
         }
-        bloquearDuranteValidacao();
+        bloquearDuranteValidacao(snapshot);
         controladorAtual?.abort();
         const numeroValidacao = ++contadorValidacao;
         const controlador = new AbortController();
@@ -225,11 +272,13 @@ export function App(nube) {
             });
             const resultado = await resposta.json().catch(() => ({}));
             if (!resposta.ok) {
-                if ([400, 401, 403, 413, 422, 429].includes(resposta.status)) {
+                if (STATUS_SEGURANCA_BLOQUEANTES.has(resposta.status)) {
                     checkoutToken = "";
                     checkoutTokenExpiraEmMs = 0;
                     throw new ErroSegurancaCheckout(resposta.status, resultado.message || "A validação de segurança recusou a solicitação.");
                 }
+                // 404/408/5xx e equivalentes são tratados como indisponibilidade
+                // técnica e seguem a política fail-open solicitada.
                 throw new Error(`Erro HTTP ${resposta.status}`);
             }
             if (numeroValidacao !== contadorValidacao)
@@ -243,7 +292,7 @@ export function App(nube) {
             if (numeroValidacao !== contadorValidacao)
                 return;
             if (erro instanceof ErroSegurancaCheckout) {
-                if ([400, 401, 403, 413, 422, 429].includes(Number(erro.status))) {
+                if (STATUS_SEGURANCA_BLOQUEANTES.has(Number(erro.status))) {
                     const resultado = {
                         allowed: false,
                         code: "VALIDATION_SECURITY_BLOCKED",
@@ -285,16 +334,40 @@ export function App(nube) {
         }, atraso);
     }
     function bloquearEAgendar(forcarConsulta = false, atraso = ATRASO_VALIDACAO_MS) {
-        bloquearDuranteValidacao();
+        const snapshot = obterSnapshot();
+        bloquearDuranteValidacao(snapshot);
         agendarValidacao(forcarConsulta, atraso);
     }
     function tratarReconstrucaoDoCheckout(forcarConsulta = true) {
-        bloquearDuranteValidacao();
+        const snapshot = obterSnapshot();
+        bloquearDuranteValidacao(snapshot);
         agendarValidacao(forcarConsulta);
-        setTimeout(() => { if (checkoutBloqueado)
-            reaplicarBloqueioAtual(); }, 50);
-        setTimeout(() => { if (checkoutBloqueado)
-            reaplicarBloqueioAtual(); }, 250);
+        setTimeout(() => {
+            if (checkoutBloqueado)
+                reaplicarBloqueioAtual();
+            if (interacoesBloqueadas)
+                nube.render("modal_content", componenteModalValidacao());
+        }, 50);
+        setTimeout(() => {
+            if (checkoutBloqueado)
+                reaplicarBloqueioAtual();
+            if (interacoesBloqueadas)
+                nube.render("modal_content", componenteModalValidacao());
+        }, 250);
+    }
+    // 1) O botão de finalizar nasce bloqueado antes de qualquer fetch/debounce.
+    nube.send("config:set", () => ({ config: { has_cart_validation: true } }));
+    enviarResultado(nube, false, MENSAGEM_VALIDANDO);
+    // 2) Se já existe CPF completo no estado, também bloqueia as interações com
+    // o checkout usando modal_content/backdrop enquanto a API responde.
+    bloquearInteracoes(obterSnapshot());
+    for (const atraso of [0, 50, 150]) {
+        setTimeout(() => {
+            if (checkoutBloqueado)
+                reaplicarBloqueioAtual();
+            if (interacoesBloqueadas)
+                nube.render("modal_content", componenteModalValidacao());
+        }, atraso);
     }
     nube.on("checkout:ready", () => tratarReconstrucaoDoCheckout(true));
     nube.on("page:loaded", () => tratarReconstrucaoDoCheckout(true));
@@ -303,9 +376,25 @@ export function App(nube) {
     nube.on("shipping:update", () => tratarReconstrucaoDoCheckout(true));
     nube.on("payment:update", () => tratarReconstrucaoDoCheckout(true));
     nube.on("location:updated", () => bloquearEAgendar(false, 0));
+    // modal_content pode ser fechado pelo usuário com backdrop/Esc. Enquanto a
+    // validação ainda está em andamento, reabrimos imediatamente. Assim que o
+    // backend responde (permitindo, bloqueando ou fail-open), o modal é limpo.
+    nube.on("custom:modal:close", () => {
+        if (!interacoesBloqueadas)
+            return;
+        setTimeout(() => {
+            if (interacoesBloqueadas) {
+                nube.render("modal_content", componenteModalValidacao());
+            }
+        }, 0);
+    });
+    // Watchdog para reconstruções silenciosas do checkout. Não chama a API.
     setInterval(() => {
         if (checkoutBloqueado)
             reaplicarBloqueioAtual();
+        if (interacoesBloqueadas) {
+            nube.render("modal_content", componenteModalValidacao());
+        }
     }, INTERVALO_REAPLICACAO_MS);
     agendarValidacao(true, 0);
 }

@@ -12,6 +12,7 @@ from src.nuvemshop_webhook_security import (
     obter_assinatura_webhook,
 )
 from src.processador import processar_pedido
+from src.private_routes import WEBHOOK_PEDIDOS_PATH
 from src.rate_limit import limiter
 
 
@@ -26,7 +27,7 @@ def extrair_id_do_evento(dados: dict[str, Any]) -> str:
     return str(pedido_id).strip()
 
 
-@webhook_bp.route("/webhooks/pedidos", methods=["POST"])
+@webhook_bp.route(WEBHOOK_PEDIDOS_PATH, methods=["POST"])
 @limiter.limit("120 per minute", methods=["POST"])
 def receber_webhook_pedido():
     """Recebe order/created e order/updated somente com HMAC válido."""
@@ -53,9 +54,7 @@ def receber_webhook_pedido():
             "Webhook de pedido rejeitado: assinatura inválida (%s).",
             motivo_assinatura,
         )
-        return jsonify(
-            {"sucesso": False, "erro": "Webhook não autorizado"}
-        ), 401
+        return "", 404
 
     dados = request.get_json(silent=True)
     if not isinstance(dados, dict):
@@ -65,9 +64,7 @@ def receber_webhook_pedido():
 
     if not loja_webhook_valida(dados.get("store_id")):
         logger.warning("Webhook de pedido rejeitado: store_id divergente.")
-        return jsonify(
-            {"sucesso": False, "erro": "Webhook não autorizado"}
-        ), 403
+        return "", 404
 
     evento = str(dados.get("event", "")).strip()
     if evento not in {"order/created", "order/updated"}:
